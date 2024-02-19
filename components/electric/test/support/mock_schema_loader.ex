@@ -5,6 +5,10 @@ defmodule Electric.Postgres.MockSchemaLoader do
     Schema
   }
 
+  alias Electric.Satellite.SatPerms
+
+  defstruct versions: [], opts: [], global_perms: [], user_perms: []
+
   def oid_loader(type, schema, name) do
     {:ok, Enum.join(["#{type}", schema, name], ".") |> :erlang.phash2(50_000)}
   end
@@ -139,14 +143,14 @@ defmodule Electric.Postgres.MockSchemaLoader do
     {:agent, pid}
   end
 
-  def receive_tx({versions, opts}, %{"txid" => _txid, "txts" => _txts} = row, version) do
+  def receive_tx(%{opts: opts} = state, %{"txid" => _txid, "txts" => _txts} = row, version) do
     key = tx_key(row)
-    {versions, Map.update(opts, :txids, %{key => version}, &Map.put(&1, key, version))}
+    %{state | opts: Map.update(opts, :txids, %{key => version}, &Map.put(&1, key, version))}
   end
 
   # ignore rows that don't define a txid, txts key
-  def receive_tx({versions, opts}, _row, _version) do
-    {versions, opts}
+  def receive_tx(state, _row, _version) do
+    state
   end
 
   def electrify_table({__MODULE__, state}, {schema, table}) do
@@ -158,9 +162,17 @@ defmodule Electric.Postgres.MockSchemaLoader do
     {:agent, pid}
   end
 
-  def electrify_table({versions, opts}, {schema, table}) do
-    {versions,
-     Map.update(opts, :tables, %{{schema, table} => true}, &Map.put(&1, {schema, table}, true))}
+  def electrify_table(%{opts: opts} = state, {schema, table}) do
+    %{
+      state
+      | opts:
+          Map.update(
+            opts,
+            :tables,
+            %{{schema, table} => true},
+            &Map.put(&1, {schema, table}, true)
+          )
+    }
   end
 
   defp tx_key(%{"txid" => txid, "txts" => txts}) do
@@ -196,7 +208,7 @@ defmodule Electric.Postgres.MockSchemaLoader do
       |> Map.pop(:versions, [])
 
     notify(opts, {:connect, conn_config})
-    {:ok, {versions, opts}}
+    {:ok, %__MODULE__{versions: versions, opts: opts}}
   end
 
   @impl true
@@ -204,12 +216,12 @@ defmodule Electric.Postgres.MockSchemaLoader do
     Agent.get(pid, &load/1)
   end
 
-  def load({[], opts}) do
+  def load(%{versions: [], opts: opts}) do
     notify(opts, :load)
     {:ok, SchemaLoader.Version.new(nil, Schema.new())}
   end
 
-  def load({[%{version: version, schema: schema} | _versions], opts}) do
+  def load(%{versions: [%{version: version, schema: schema} | _versions], opts: opts}) do
     notify(opts, {:load, version, schema})
     {:ok, SchemaLoader.Version.new(version, schema)}
   end
@@ -219,7 +231,7 @@ defmodule Electric.Postgres.MockSchemaLoader do
     Agent.get(pid, &load(&1, version))
   end
 
-  def load({versions, opts}, version) do
+  def load(%{versions: versions, opts: opts}, version) do
     case Enum.find(versions, &(&1.version == version)) do
       %Migration{schema: schema} ->
         notify(opts, {:load, version, schema})
@@ -242,10 +254,10 @@ defmodule Electric.Postgres.MockSchemaLoader do
     end
   end
 
-  def save({versions, opts}, version, schema, stmts) do
+  def save(%{versions: versions, opts: opts} = state, version, schema, stmts) do
     notify(opts, {:save, version, schema, stmts})
 
-    {:ok, {[mock_version(version, schema, stmts) | versions], opts},
+    {:ok, %{state | versions: [mock_version(version, schema, stmts) | versions]},
      SchemaLoader.Version.new(version, schema)}
   end
 
@@ -254,12 +266,12 @@ defmodule Electric.Postgres.MockSchemaLoader do
     Agent.get(pid, &relation_oid(&1, type, schema, name))
   end
 
-  def relation_oid({_versions, %{oid_loader: oid_loader}}, type, schema, name)
+  def relation_oid(%{opts: %{oid_loader: oid_loader}}, type, schema, name)
       when is_function(oid_loader, 3) do
     oid_loader.(type, schema, name)
   end
 
-  def relation_oid({_versions, opts}, type, schema, name) do
+  def relation_oid(%{opts: opts}, type, schema, name) do
     notify(opts, {:relation_oid, type, schema, name})
 
     with %{} = oids <- get_in(opts, [:oids, type]),
@@ -275,7 +287,7 @@ defmodule Electric.Postgres.MockSchemaLoader do
     Agent.get(pid, &refresh_subscription(&1, name))
   end
 
-  def refresh_subscription({_versions, opts}, name) do
+  def refresh_subscription(%{opts: opts}, name) do
     notify(opts, {:refresh_subscription, name})
     :ok
   end
@@ -285,7 +297,7 @@ defmodule Electric.Postgres.MockSchemaLoader do
     Agent.get(pid, &migration_history(&1, after_version))
   end
 
-  def migration_history({versions, opts}, after_version) do
+  def migration_history(%{versions: versions, opts: opts}, after_version) do
     notify(opts, {:migration_history, after_version})
 
     migrations =
@@ -305,7 +317,7 @@ defmodule Electric.Postgres.MockSchemaLoader do
     Agent.get(pid, &known_migration_version?(&1, version))
   end
 
-  def known_migration_version?({versions, opts}, version) do
+  def known_migration_version?(%{versions: versions, opts: opts}, version) do
     notify(opts, {:known_migration_version?, version})
 
     Enum.any?(versions, &(&1.version == version))
@@ -320,7 +332,7 @@ defmodule Electric.Postgres.MockSchemaLoader do
     Agent.get(pid, &electrified_tables/1)
   end
 
-  def electrified_tables({[version | _versions], _opts}) do
+  def electrified_tables(%{versions: [version | _versions]}) do
     {:ok, Schema.table_info(version.schema)}
   end
 
@@ -333,7 +345,7 @@ defmodule Electric.Postgres.MockSchemaLoader do
     Agent.get(pid, &table_electrified?(&1, {schema, name}))
   end
 
-  def table_electrified?({_versions, opts} = state, {schema, name}) do
+  def table_electrified?(%{opts: opts} = state, {schema, name}) do
     if Map.get(opts.tables, {schema, name}) do
       {:ok, true}
     else
@@ -348,7 +360,7 @@ defmodule Electric.Postgres.MockSchemaLoader do
     Agent.get(pid, &index_electrified?(&1, {schema, name}))
   end
 
-  def index_electrified?({[version | _versions], _opts}, {schema, name}) do
+  def index_electrified?(%{versions: [version | _versions]}, {schema, name}) do
     {:ok,
      Enum.any?(
        Schema.indexes(version.schema, include_constraints: false),
@@ -360,12 +372,16 @@ defmodule Electric.Postgres.MockSchemaLoader do
     send(parent, {__MODULE__, msg})
   end
 
+  defp notify(_, _msg) do
+    :ok
+  end
+
   @impl true
   def tx_version({:agent, pid}, row) do
     Agent.get(pid, &tx_version(&1, row))
   end
 
-  def tx_version({versions, opts}, %{"txid" => txid, "txts" => txts} = row) do
+  def tx_version(%{versions: versions, opts: opts}, %{"txid" => txid, "txts" => txts} = row) do
     notify(opts, {:tx_version, txid, txts})
 
     key = tx_key(row)
@@ -391,5 +407,77 @@ defmodule Electric.Postgres.MockSchemaLoader do
       {:ok, version} ->
         {:ok, version}
     end
+  end
+
+  @impl true
+  def global_permissions(%{global_perms: []}) do
+    {:ok, initial_global_perms()}
+  end
+
+  def global_permissions(%{global_perms: [perms | _]}) do
+    {:ok, perms}
+  end
+
+  @impl true
+  def user_permissions(%{user_perms: user_perms} = state, user_id) do
+    case(Enum.find(user_perms, &(&1.user_id == user_id))) do
+      nil ->
+        id = next_user_perms_id(state)
+
+        {:ok, global} = global_permissions(state)
+        perms = %SatPerms{id: id, user_id: user_id, rules: global}
+        {:ok, %{state | user_perms: [perms | user_perms]}, perms}
+
+      perms ->
+        {:ok, state, perms}
+    end
+  end
+
+  @impl true
+  def user_permissions(%{user_perms: user_perms}, user_id, perms_id) do
+    case(Enum.find(user_perms, &(&1.user_id == user_id && &1.id == perms_id))) do
+      nil ->
+        {:error, "perms id #{perms_id} not found for user #{user_id}"}
+
+      perms ->
+        {:ok, perms}
+    end
+  end
+
+  @impl true
+  def save_global_permissions(%{global_perms: global_perms} = state, %SatPerms.Rules{} = rules) do
+    {:ok, %{state | global_perms: [rules | global_perms]}}
+  end
+
+  @impl true
+  def save_user_permissions(%{user_perms: user_perms} = state, user_id, %SatPerms.Roles{} = perms) do
+    %{rules_id: rules_id, parent_id: parent_id, roles: roles} = perms
+
+    global =
+      cond do
+        rules_id == 1 -> initial_global_perms()
+        global = Enum.find(state.global_perms, &(&1.id == rules_id)) -> global
+        true -> nil
+      end
+
+    if global do
+      if parent_id && !Enum.find(user_perms, &(&1.id == parent_id)) do
+        {:error, "invalid parent permissions id #{parent_id}"}
+      else
+        id = next_user_perms_id(state)
+
+        perms = %SatPerms{id: id, user_id: user_id, rules: global, roles: roles}
+        {:ok, %{state | user_perms: [perms | user_perms]}, perms}
+      end
+    else
+      {:error, "invalid global permissions id #{rules_id}"}
+    end
+  end
+
+  defp next_user_perms_id(%{user_perms: []}), do: 1
+  defp next_user_perms_id(%{user_perms: [%{id: id} | _]}), do: id + 1
+
+  defp initial_global_perms do
+    %SatPerms.Rules{id: 1}
   end
 end

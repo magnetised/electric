@@ -112,6 +112,7 @@ defmodule ElectricTest.PermissionsHelpers do
 
   defmodule Chgs do
     alias Electric.Replication.Changes
+    alias Electric.Postgres.Extension
 
     def tx(changes, attrs \\ []) do
       %Changes.Transaction{changes: changes}
@@ -135,6 +136,17 @@ defmodule ElectricTest.PermissionsHelpers do
     def delete(table, record, attrs \\ []) do
       %Changes.DeletedRecord{relation: table, old_record: record}
       |> put_change_attrs(attrs)
+    end
+
+    def ddlx(ddlx) do
+      bytes = Protox.encode!(ddlx) |> IO.iodata_to_binary()
+
+      %Changes.NewRecord{
+        relation: Extension.ddlx_relation(),
+        record: %{
+          "ddlx" => bytes
+        }
+      }
     end
 
     defp put_tx_attrs(tx, attrs) do
@@ -398,10 +410,15 @@ defmodule ElectricTest.PermissionsHelpers do
   end
 
   defmodule Proto do
+    alias Electric.DDLX.Command
     alias Electric.Satellite.SatPerms
 
     def table(schema \\ "public", name) do
       %SatPerms.Table{schema: schema, name: name}
+    end
+
+    def scope(schema \\ "public", name) do
+      table(schema, name)
     end
 
     def role(name) do
@@ -414,6 +431,30 @@ defmodule ElectricTest.PermissionsHelpers do
 
     def anyone() do
       %SatPerms.RoleName{role: {:predefined, :ANYONE}}
+    end
+
+    def assign(attrs) do
+      SatPerms.Assign |> struct(attrs) |> Command.put_id()
+    end
+
+    def unassign(attrs) do
+      SatPerms.Unassign |> struct(attrs) |> Command.put_id()
+    end
+
+    def grant(attrs) do
+      SatPerms.Grant |> struct(attrs) |> Command.put_id()
+    end
+
+    def revoke(attrs) do
+      SatPerms.Revoke |> struct(attrs) |> Command.put_id()
+    end
+
+    def sqlite(stmt) do
+      %SatPerms.Sqlite{stmt: stmt} |> Command.put_id()
+    end
+
+    def encode(struct) do
+      Protox.encode!(struct) |> IO.iodata_to_binary()
     end
   end
 end

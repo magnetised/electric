@@ -29,6 +29,8 @@ defmodule Electric.Postgres.Extension do
   @roles_relation "roles"
   @assignments_relation "assignments"
   @ddlx_commands_relation "ddlx_commands"
+  @global_perms_relation "global_perms_state"
+  @user_perms_relation "user_perms_state"
 
   electric = &to_string([?", @schema, ?", ?., ?", &1, ?"])
 
@@ -44,6 +46,8 @@ defmodule Electric.Postgres.Extension do
   @roles_table electric.(@roles_relation)
   @assignments_table electric.(@assignments_relation)
   @ddlx_table electric.(@ddlx_commands_relation)
+  @global_perms_table electric.(@global_perms_relation)
+  @user_perms_table electric.(@user_perms_relation)
 
   @all_schema_query ~s(SELECT "schema", "version", "migration_ddl" FROM #{@schema_table} ORDER BY "version" ASC)
   @current_schema_query ~s(SELECT "schema", "version" FROM #{@schema_table} ORDER BY "id" DESC LIMIT 1)
@@ -114,10 +118,14 @@ defmodule Electric.Postgres.Extension do
   def roles_table, do: @roles_table
   def assignments_table, do: @assignments_table
   def ddlx_table, do: @ddlx_table
+  def global_perms_table, do: @global_perms_table
+  def user_perms_table, do: @user_perms_table
 
   def ddl_relation, do: {@schema, @ddl_relation}
   def version_relation, do: {@schema, @version_relation}
   def schema_relation, do: {@schema, @schema_relation}
+  def roles_relation, do: {@schema, @roles_relation}
+  def ddlx_relation, do: {@schema, @ddlx_commands_relation}
   def acked_client_lsn_relation, do: {@schema, @acked_client_lsn_relation}
   def publication_name, do: @publication_name
   def slot_name, do: @slot_name
@@ -134,6 +142,8 @@ defmodule Electric.Postgres.Extension do
            when relation == {@schema, @acked_client_lsn_relation}
 
   defguard is_perms_relation(relation) when relation == {@schema, @ddlx_commands_relation}
+
+  defguard is_role_relation(relation) when relation == {@schema, @roles_relation}
 
   def extract_ddl_sql(%{"txid" => _, "txts" => _, "query" => query}) do
     {:ok, query}
@@ -327,7 +337,8 @@ defmodule Electric.Postgres.Extension do
       Migrations.Migration_20240110110200_DropUnusedFunctions,
       Migrations.Migration_20240205141200_ReinstallTriggerFunctionWriteCorrectMaxTag,
       Migrations.Migration_20240213160300_DropGenerateElectrifiedSqlFunction,
-      Migrations.Migration_20240212161153_DDLXCommands
+      Migrations.Migration_20240212161153_DDLXCommands,
+      Migrations.Migration_20240214131615_PermissionsState
     ]
   end
 

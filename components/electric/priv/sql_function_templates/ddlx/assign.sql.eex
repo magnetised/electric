@@ -223,8 +223,8 @@ BEGIN
                         SELECT id, role_id FROM <%= schema() %>.assign_%1$s_join WHERE assignment_id = \'%4$s\' AND ( %5$s_%6$s ) = ( NEW.%7$s ) INTO join_key, role_key;
                         IF ( %8$s ) THEN
                            IF join_key IS NULL THEN
-                               INSERT INTO <%= roles_table() %> (user_id, role)
-                                   VALUES (NEW.%9$s, %10$s) returning id INTO role_key;
+                               INSERT INTO <%= roles_table() %> (assignment_id, user_id, role)
+                                   VALUES (assignment_id, NEW.%9$s, %10$s) returning id INTO role_key;
                                INSERT INTO <%= schema() %>.assign_%1$s_join (user_id, %5$s_%6$s, role_id, assignment_id)
                                    VALUES (NEW.%9$s, NEW.%7$s, role_key, \'%4$s\');
                            ELSE
@@ -304,8 +304,8 @@ BEGIN
                         SELECT id, role_id FROM <%= schema() %>.assign_%1$s_join WHERE assignment_id = \'%4$s\' AND ( %5$s_%6$s ) = ( NEW.%7$s ) INTO join_key, role_key;
                         IF ( %8$s ) THEN
                            IF join_key IS NULL THEN
-                               INSERT INTO <%= roles_table() %> (user_id, role, scope_table, scope_id)
-                                   VALUES (NEW.%9$s, %10$s, \'%11$s\', scope_key) returning id INTO role_key;
+                               INSERT INTO <%= roles_table() %> (assignment_id, user_id, role, scope_table, scope_id)
+                                   VALUES (assignment_id, NEW.%9$s, %10$s, \'%11$s\', scope_key) returning id INTO role_key;
                                INSERT INTO <%= schema() %>.assign_%1$s_join (user_id, %12$s, %5$s_%6$s, role_id, assignment_id)
                                    VALUES (NEW.%9$s, NEW.%13$s, NEW.%7$s, role_key, \'%4$s\');
                            ELSE

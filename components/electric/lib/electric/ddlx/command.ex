@@ -18,7 +18,33 @@ defmodule Electric.DDLX.Command do
           tables: [Electric.Postgres.relation()]
         }
 
-  def tag(%__MODULE__{tag: tag}), do: tag
+  def tag(%__MODULE__{tag: tag}) do
+    tag
+  end
+
+  @perms_with_ids [:assigns, :unassigns, :grants, :revokes]
+  @perms_without_ids [:sqlite]
+
+  def ddlx(cmds) do
+    ddlx =
+      Enum.reduce(@perms_with_ids, %SatPerms.DDLX{}, fn type, ddlx ->
+        Map.update!(ddlx, type, fn [] ->
+          cmds
+          |> Keyword.get(type, [])
+          |> Enum.map(&put_id/1)
+        end)
+      end)
+
+    Enum.reduce(@perms_without_ids, ddlx, &Map.put(&2, &1, Keyword.get(cmds, &1, [])))
+  end
+
+  def put_id(%{id: id} = cmd) when is_struct(cmd) and id in ["", nil] do
+    Map.put(cmd, :id, command_id(cmd))
+  end
+
+  def put_id(cmd) when is_struct(cmd) do
+    cmd
+  end
 
   def pg_sql(cmd) do
     PgSQL.to_sql(cmd)
@@ -108,6 +134,17 @@ defmodule Electric.DDLX.Command do
     ])
   end
 
+  def command_id(%SatPerms.Sqlite{} = sqlite) do
+    hash([
+      sqlite.stmt
+    ])
+  end
+
+  # hash the given terms in the struct together. `SHA1` is chosen because it is smaller in terms
+  # of bytes, rather than for any cryptographic reason. Since the hash/id is used in the naming of
+  # triggers and tables within pg, a bigger hash, such as `SHA256`, would use too many of the 64
+  # available bytes for these pg objects. This is the same reason to use encode32 rather than
+  # encode16 -- it just eats fewer of the available characters.
   defp hash(terms) do
     terms
     |> Enum.map(&fingerprint/1)

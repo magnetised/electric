@@ -192,4 +192,47 @@ defmodule Electric.Postgres.Extension.SchemaLoader.Epgsql do
       Extension.tx_version(conn, row)
     end)
   end
+
+  @impl true
+  def global_permissions(pool) do
+    checkout!(pool, fn conn ->
+      Extension.Permissions.global(conn)
+    end)
+  end
+
+  @impl true
+  def save_global_permissions(pool, permissions) do
+    checkout!(pool, fn conn ->
+      with :ok <- Extension.Permissions.save_global(conn, permissions) do
+        {:ok, pool}
+      end
+    end)
+  end
+
+  @impl true
+  def user_permissions(pool, user_id) do
+    checkout!(pool, fn conn ->
+      with {:ok, perms} <- Extension.Permissions.user(conn, user_id) do
+        {:ok, pool, perms}
+      end
+    end)
+  end
+
+  @impl true
+  def user_permissions(pool, user_id, perms_id) do
+    checkout!(pool, fn conn ->
+      with {:ok, perms} <- Extension.Permissions.user(conn, user_id, perms_id) do
+        {:ok, perms}
+      end
+    end)
+  end
+
+  @impl true
+  def save_user_permissions(pool, user_id, roles) do
+    checkout!(pool, fn conn ->
+      with {:ok, perms} <- Extension.Permissions.save_user(conn, user_id, roles) do
+        {:ok, pool, perms}
+      end
+    end)
+  end
 end

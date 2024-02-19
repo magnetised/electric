@@ -150,6 +150,31 @@ defmodule Electric.Postgres.Extension.SchemaCache do
     call(origin, {:tx_version, row})
   end
 
+  @impl SchemaLoader
+  def global_permissions(origin) do
+    call(origin, :global_permissions)
+  end
+
+  @impl SchemaLoader
+  def save_global_permissions(origin, rules) do
+    call(origin, {:save_global_permissions, rules})
+  end
+
+  @impl SchemaLoader
+  def user_permissions(origin, user_id) do
+    call(origin, {:user_permissions, user_id})
+  end
+
+  @impl SchemaLoader
+  def user_permissions(origin, user_id, permissions_id) do
+    call(origin, {:user_permissions, user_id, permissions_id})
+  end
+
+  @impl SchemaLoader
+  def save_user_permissions(origin, user_id, roles) do
+    call(origin, {:save_user_permissions, user_id, roles})
+  end
+
   def relation(origin, oid) when is_integer(oid) do
     call(origin, {:relation, oid})
   end
@@ -370,6 +395,50 @@ defmodule Electric.Postgres.Extension.SchemaCache do
       end
 
     {:reply, result, state}
+  end
+
+  def handle_call(:global_permissions, _from, state) do
+    {:reply, SchemaLoader.global_permissions(state.backend), state}
+  end
+
+  def handle_call({:save_global_permissions, rules}, _from, state) do
+    case SchemaLoader.save_global_permissions(state.backend, rules) do
+      {:ok, backend} ->
+        {:reply, {:ok, state.origin}, %{state | backend: backend}}
+
+      error ->
+        {:reply, error, state}
+    end
+  end
+
+  def handle_call({:user_permissions, user_id}, _from, state) do
+    case SchemaLoader.user_permissions(state.backend, user_id) do
+      {:ok, backend, roles} ->
+        {:reply, {:ok, state.origin, roles}, %{state | backend: backend}}
+
+      error ->
+        {:reply, error, state}
+    end
+  end
+
+  def handle_call({:user_permissions, user_id, permissions_id}, _from, state) do
+    case SchemaLoader.user_permissions(state.backend, user_id, permissions_id) do
+      {:ok, roles} ->
+        {:reply, {:ok, roles}, state}
+
+      error ->
+        {:reply, error, state}
+    end
+  end
+
+  def handle_call({:save_user_permissions, user_id, roles}, _from, state) do
+    case SchemaLoader.save_user_permissions(state.backend, user_id, roles) do
+      {:ok, backend} ->
+        {:reply, {:ok, state.origin}, %{state | backend: backend}}
+
+      error ->
+        {:reply, error, state}
+    end
   end
 
   # Prevent deadlocks:
