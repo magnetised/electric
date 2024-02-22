@@ -25,9 +25,13 @@ defmodule Electric.Postgres.Extension do
   @electrified_table_relation "electrified"
   @acked_client_lsn_relation "acknowledged_client_lsns"
 
+  # grants, roles and assignments should be dropped when we do the work to coalesce the extension
+  # migrations
   @grants_relation "grants"
   @roles_relation "roles"
   @assignments_relation "assignments"
+
+  # permissions storage and management
   @ddlx_commands_relation "ddlx_commands"
   @global_perms_relation "global_perms_state"
   @user_perms_relation "user_perms_state"
@@ -325,7 +329,6 @@ defmodule Electric.Postgres.Extension do
       Migrations.Migration_20230605141256_ElectrifyFunction,
       Migrations.Migration_20230715000000_UtilitiesTable,
       Migrations.Migration_20230814170123_RenameDDLX,
-      Migrations.Migration_20230814170745_ElectricDDL,
       Migrations.Migration_20230829000000_AcknowledgedClientLsnsTable,
       Migrations.Migration_20230918115714_DDLCommandUniqueConstraint,
       Migrations.Migration_20230921161045_DropEventTriggers,

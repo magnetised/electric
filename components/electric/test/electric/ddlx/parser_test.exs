@@ -689,6 +689,7 @@ defmodule Electric.DDLX.ParserTest do
                cmds: %SatPerms.DDLX{
                  grants: [
                    %SatPerms.Grant{
+                     id: "l5clz3xxefjb7pn2erskct2qvh3jjxzv",
                      check: "name = 'Paul'",
                      columns: nil,
                      table: Proto.table("thing", "köln_en$ts"),
@@ -993,7 +994,7 @@ defmodule Electric.DDLX.ParserTest do
 
     test "grant with field accesses in check clause" do
       sql =
-        "ELECTRIC GRANT READ ON issues TO (projects, 'editor') CHECK (row.user_id = AUTH.user_id)"
+        "ELECTRIC GRANT READ ON issues TO (projects, 'editor') WHERE (row.user_id = AUTH.user_id)"
 
       {:ok, result} = Parser.parse(sql)
 
@@ -1018,7 +1019,7 @@ defmodule Electric.DDLX.ParserTest do
 
     test "grant with multiple clauses in check clause" do
       sql =
-        "ELECTRIC GRANT READ ON issues TO (projects, 'editor') CHECK ((row.user_id = AUTH.user_id) AND (thing.reason > 2))"
+        "ELECTRIC GRANT READ ON issues TO (projects, 'editor') WHERE ((row.user_id = AUTH.user_id) AND (thing.reason > 2))"
 
       {:ok, result} = Parser.parse(sql)
 

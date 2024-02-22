@@ -10,6 +10,8 @@ defmodule Electric.Satellite.PermissionsTest do
     Tree
   }
 
+  alias Electric.Postgres.Extension.SchemaLoader
+  alias Electric.Postgres.MockSchemaLoader
   alias Electric.Satellite.{Permissions, Permissions.MoveOut}
   alias Electric.Replication.Changes
 
@@ -25,6 +27,56 @@ defmodule Electric.Satellite.PermissionsTest do
   @project_memberships {"public", "project_memberships"}
 
   setup do
+    loader_spec =
+      MockSchemaLoader.backend_spec(
+        migrations: [
+          {"01",
+           [
+             "create table regions (id uuid primary key)",
+             "create table offices (id uuid primary key, region_id uuid not null references regions (id))",
+             "create table workspaces (id uuid primary key)",
+             "create table projects (id uuid primary key, workspace_id uuid not null references workspaces (id))",
+             "create table issues (id uuid primary key, project_id uuid not null references projects (id))",
+             "create table comments (id uuid primary key, issue_id uuid not null references issues (id))",
+             "create table reactions (id uuid primary key, comment_id uuid not null references comments (id))",
+             "create table users (id uuid primary key)",
+             "create table teams (id uuid primary key)",
+             """
+             create table project_memberships (
+                id uuid primary key,
+                user_id uuid not null references users (id),
+                project_id uuid not null references projects (id),
+                project_role text not null
+             )
+             """,
+             """
+             create table team_memberships (
+                id uuid primary key,
+                user_id uuid not null references users (id),
+                team_id uuid not null references teams (id),
+                team_role text not null
+             )
+             """,
+             """
+             create table site_admins (
+                id uuid primary key,
+                user_id uuid not null references users (id),
+                site_role text not null
+             )
+             """,
+             """
+             create table my_default.admin_users (
+                id uuid primary key,
+                user_id uuid not null references users (id)
+             )
+             """
+           ]}
+        ]
+      )
+
+    {:ok, loader} = SchemaLoader.connect(loader_spec, [])
+    {:ok, schema_version} = SchemaLoader.load(loader)
+
     tree =
       Tree.new(
         [
@@ -69,13 +121,14 @@ defmodule Electric.Satellite.PermissionsTest do
 
     {:ok, _} = start_supervised(Perms.Transient)
 
-    {:ok, tree: tree}
+    {:ok, tree: tree, loader: loader, schema_version: schema_version}
   end
 
   describe "validate_write/3" do
     test "scoped role, scoped grant", cxt do
       perms =
         perms_build(
+          cxt,
           ~s[GRANT ALL ON #{table(@comments)} TO (projects, 'editor')],
           [
             Roles.role("editor", @projects, "p2")
@@ -118,6 +171,7 @@ defmodule Electric.Satellite.PermissionsTest do
     test "unscoped role, scoped grant", cxt do
       perms =
         perms_build(
+          cxt,
           ~s[GRANT ALL ON #{table(@comments)} TO (projects, 'editor')],
           [
             Roles.role("editor")
@@ -138,6 +192,7 @@ defmodule Electric.Satellite.PermissionsTest do
     test "scoped role, unscoped grant", cxt do
       perms =
         perms_build(
+          cxt,
           ~s[GRANT ALL ON #{table(@comments)} TO 'editor'],
           [
             # we have an editor role within project p2
@@ -169,6 +224,7 @@ defmodule Electric.Satellite.PermissionsTest do
     test "grant for different table", cxt do
       perms =
         perms_build(
+          cxt,
           [
             ~s[GRANT SELECT ON #{table(@comments)} TO 'editor'],
             ~s[GRANT ALL ON #{table(@reactions)} TO 'editor']
@@ -200,6 +256,7 @@ defmodule Electric.Satellite.PermissionsTest do
     test "unscoped role, unscoped grant", cxt do
       perms =
         perms_build(
+          cxt,
           ~s[GRANT UPDATE ON #{table(@comments)} TO 'editor'],
           [
             Roles.role("editor")
@@ -234,6 +291,7 @@ defmodule Electric.Satellite.PermissionsTest do
     test "scoped role, change outside of scope", cxt do
       perms =
         perms_build(
+          cxt,
           [
             ~s[GRANT UPDATE ON #{table(@comments)} TO 'editor'],
             ~s[GRANT ALL ON #{table(@regions)} TO 'admin']
@@ -264,6 +322,7 @@ defmodule Electric.Satellite.PermissionsTest do
       # until we run out of get permission.
       perms =
         perms_build(
+          cxt,
           [
             ~s[GRANT UPDATE (description) ON #{table(@issues)} TO (projects, 'editor')],
             ~s[GRANT UPDATE (title) ON #{table(@issues)} TO 'editor']
@@ -289,6 +348,7 @@ defmodule Electric.Satellite.PermissionsTest do
     test "AUTHENTICATED w/user_id", cxt do
       perms =
         perms_build(
+          cxt,
           ~s[GRANT ALL ON #{table(@comments)} TO AUTHENTICATED],
           []
         )
@@ -306,6 +366,7 @@ defmodule Electric.Satellite.PermissionsTest do
     test "AUTHENTICATED w/o permission", cxt do
       perms =
         perms_build(
+          cxt,
           ~s[GRANT SELECT ON #{table(@comments)} TO AUTHENTICATED],
           []
         )
@@ -323,6 +384,7 @@ defmodule Electric.Satellite.PermissionsTest do
     test "AUTHENTICATED w/o user_id", cxt do
       perms =
         perms_build(
+          cxt,
           ~s[GRANT ALL ON #{table(@comments)} TO AUTHENTICATED],
           [],
           auth: Auth.nobody()
@@ -341,6 +403,7 @@ defmodule Electric.Satellite.PermissionsTest do
     test "ANYONE w/o user_id", cxt do
       perms =
         perms_build(
+          cxt,
           ~s[GRANT ALL ON #{table(@comments)} TO ANYONE],
           [],
           auth: Auth.nobody()
@@ -359,6 +422,7 @@ defmodule Electric.Satellite.PermissionsTest do
     test "protected columns", cxt do
       perms =
         perms_build(
+          cxt,
           [
             ~s[GRANT INSERT (id, text) ON #{table(@comments)} TO 'editor'],
             ~s[GRANT UPDATE (text) ON #{table(@comments)} TO 'editor']
@@ -415,6 +479,7 @@ defmodule Electric.Satellite.PermissionsTest do
     test "moves between auth scopes", cxt do
       perms =
         perms_build(
+          cxt,
           [
             ~s[GRANT UPDATE ON #{table(@issues)} TO (#{table(@projects)}, 'editor')],
             ~s[GRANT SELECT ON #{table(@issues)} TO 'reader']
@@ -455,6 +520,7 @@ defmodule Electric.Satellite.PermissionsTest do
     test "write in scope tree", cxt do
       perms =
         perms_build(
+          cxt,
           [
             ~s[GRANT ALL ON #{table(@issues)} TO (#{table(@projects)}, 'editor')],
             ~s[GRANT ALL ON #{table(@comments)} TO (#{table(@projects)}, 'editor')],
@@ -495,9 +561,10 @@ defmodule Electric.Satellite.PermissionsTest do
   describe "intermediate roles" do
     # roles that are created on the client and then used within the same tx before triggers have
     # run on pg
-    setup(_cxt) do
+    setup(cxt) do
       perms =
         perms_build(
+          cxt,
           [
             ~s[GRANT ALL ON #{table(@issues)} TO (#{table(@projects)}, 'manager')],
             ~s[GRANT ALL ON #{table(@comments)} TO (#{table(@projects)}, 'manager')],
@@ -513,7 +580,7 @@ defmodule Electric.Satellite.PermissionsTest do
           [
             # start with the ability to create projects and memberships
             Roles.role("project_admin"),
-            Roles.role("manager", @projects, "p1", assign_id: "assign-1")
+            Roles.role("manager", @projects, "p1", row_id: ["pm1"], assign_id: "assign-1")
           ]
         )
 
@@ -659,7 +726,9 @@ defmodule Electric.Satellite.PermissionsTest do
                  Chgs.tx([
                    Chgs.delete(@project_memberships, %{
                      "id" => "pm100",
-                     "project_id" => "p100"
+                     "project_id" => "p100",
+                     "user_id" => Auth.user_id(),
+                     "role" => "manager"
                    }),
                    Chgs.insert(@issues, %{"id" => "i101", "project_id" => "p100"})
                  ])
@@ -762,6 +831,7 @@ defmodule Electric.Satellite.PermissionsTest do
     setup(cxt) do
       perms =
         perms_build(
+          cxt,
           [
             ~s[GRANT ALL ON #{table(@issues)} TO (#{table(@projects)}, 'editor')],
             ~s[GRANT SELECT ON #{table(@issues)} TO (#{table(@projects)}, 'reader')]
@@ -857,6 +927,7 @@ defmodule Electric.Satellite.PermissionsTest do
     test "removes changes we don't have permissions to see", cxt do
       perms =
         perms_build(
+          cxt,
           [
             ~s[GRANT ALL ON #{table(@issues)} TO (#{table(@projects)}, 'editor')],
             ~s[GRANT ALL ON #{table(@comments)} TO (#{table(@projects)}, 'editor')],
@@ -899,6 +970,7 @@ defmodule Electric.Satellite.PermissionsTest do
     test "ignores column limits in grants", cxt do
       perms =
         perms_build(
+          cxt,
           [
             ~s[GRANT READ (id, title) ON #{table(@issues)} TO 'editor']
           ],
@@ -922,6 +994,7 @@ defmodule Electric.Satellite.PermissionsTest do
     test "incorporates in-tx additions to scope", cxt do
       perms =
         perms_build(
+          cxt,
           [
             ~s[GRANT ALL ON #{table(@issues)} TO (#{table(@projects)}, 'editor')],
             ~s[GRANT ALL ON #{table(@comments)} TO (#{table(@projects)}, 'editor')],
@@ -950,6 +1023,7 @@ defmodule Electric.Satellite.PermissionsTest do
     test "incorporates in-tx removals from scope", cxt do
       perms =
         perms_build(
+          cxt,
           [
             ~s[GRANT ALL ON #{table(@issues)} TO (#{table(@projects)}, 'editor')],
             ~s[GRANT ALL ON #{table(@comments)} TO (#{table(@projects)}, 'editor')]
@@ -1037,6 +1111,7 @@ defmodule Electric.Satellite.PermissionsTest do
     test "removal from a scope but with global permissions", cxt do
       perms =
         perms_build(
+          cxt,
           [
             ~s[GRANT ALL ON #{table(@issues)} TO (#{table(@projects)}, 'editor')],
             ~s[GRANT ALL ON #{table(@comments)} TO (#{table(@projects)}, 'editor')],

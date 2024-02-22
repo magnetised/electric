@@ -29,6 +29,7 @@ defmodule Electric.Replication.Changes do
           Changes.NewRecord.t()
           | Changes.UpdatedRecord.t()
           | Changes.DeletedRecord.t()
+          | Changes.UpdatedPermissions.t()
 
   defmodule Transaction do
     alias Electric.Replication.Changes
@@ -168,7 +169,9 @@ defmodule Electric.Replication.Changes do
       # actual global permissions state.
       defstruct [:permissions_id]
 
-      @type t() :: %__MODULE__{permissions_id: integer()}
+      @type t() :: %__MODULE__{
+              permissions_id: integer()
+            }
     end
 
     defstruct [:type, :permissions]

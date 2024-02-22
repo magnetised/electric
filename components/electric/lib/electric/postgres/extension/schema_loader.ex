@@ -19,8 +19,8 @@ defmodule Electric.Postgres.Extension.SchemaLoader do
   @type t() :: {module(), state()}
   @type tx_fk_row() :: %{binary() => integer() | binary()}
 
-  @callback connect(Connectors.config(), Keyword.t()) :: {:ok, state()}
-  @callback load(state()) :: {:ok, Version.t()}
+  @callback connect(term(), Connectors.config()) :: {:ok, state()}
+  @callback load(state()) :: {:ok, Version.t()} | {:error, binary()}
   @callback load(state(), version()) :: {:ok, Version.t()} | {:error, binary()}
   @callback save(state(), version(), Schema.t(), [String.t()]) ::
               {:ok, state(), Version.t()} | {:error, term()}
@@ -39,6 +39,8 @@ defmodule Electric.Postgres.Extension.SchemaLoader do
   # permissions state data as we do to the schema state. seems pointless to duplicate the pg
   # connection stuff, plus why have two connection pools when we already have one.
   @callback global_permissions(state()) :: {:ok, %SatPerms.Rules{}} | {:error, term()}
+  @callback global_permissions(state(), id :: integer()) ::
+              {:ok, %SatPerms.Rules{}} | {:error, term()}
   # loading user permissions for a new user requires inserting an empty state
   @callback user_permissions(state(), user_id :: binary()) ::
               {:ok, state(), %SatPerms{}} | {:error, term()}
@@ -67,7 +69,7 @@ defmodule Electric.Postgres.Extension.SchemaLoader do
 
   @impl true
   def connect({module, opts}, conn_config) do
-    with {:ok, state} <- module.connect(conn_config, opts) do
+    with {:ok, state} <- module.connect(opts, conn_config) do
       {:ok, {module, state}}
     end
   end
@@ -138,6 +140,11 @@ defmodule Electric.Postgres.Extension.SchemaLoader do
   @impl true
   def global_permissions({module, state}) do
     module.global_permissions(state)
+  end
+
+  @impl true
+  def global_permissions({module, state}, id) do
+    module.global_permissions(state, id)
   end
 
   @impl true

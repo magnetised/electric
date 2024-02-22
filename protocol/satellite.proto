@@ -564,7 +564,7 @@ message SatPerms {
     }
     message Scope {
         Table table = 1;
-        string id = 2;
+        repeated string id = 2;
     }
     enum Privilege {
         DELETE = 0;
@@ -626,7 +626,7 @@ message SatPerms {
     }
 
     message Role {
-        string id = 1;
+        repeated string row_id = 1;
         string role = 2;
         string user_id = 3;
         string assign_id = 4;

@@ -49,9 +49,10 @@ defmodule ElectricTest.PermissionsHelpers do
       Permissions.new(auth, Transient.name())
     end
 
-    def update(perms, ddlx, roles) do
+    def update(perms, schema_version, ddlx, roles) do
       Permissions.update(
         perms,
+        schema_version,
         to_rules(ddlx),
         roles
       )
@@ -168,12 +169,14 @@ defmodule ElectricTest.PermissionsHelpers do
     end
 
     def role(role_name, table, id, attrs \\ []) do
-      %P.Role{
-        assign_id: attrs[:assign_id],
-        role: role_name,
-        user_id: Keyword.get(attrs, :user_id, Auth.user_id()),
-        scope: %P.Scope{table: relation(table), id: List.wrap(id)}
-      }
+      struct(
+        %P.Role{
+          role: role_name,
+          user_id: Keyword.get(attrs, :user_id, Auth.user_id()),
+          scope: %P.Scope{table: relation(table), id: List.wrap(id)}
+        },
+        attrs
+      )
     end
 
     defp relation({schema, name}) do
@@ -403,10 +406,12 @@ defmodule ElectricTest.PermissionsHelpers do
     Electric.Utils.inspect_relation(relation)
   end
 
-  def perms_build(grants, roles, attrs \\ []) do
+  def perms_build(cxt, grants, roles, attrs \\ []) do
+    %{schema_version: schema_version} = cxt
+
     attrs
     |> Perms.new()
-    |> Perms.update(grants, roles)
+    |> Perms.update(schema_version, grants, roles)
   end
 
   defmodule Proto do

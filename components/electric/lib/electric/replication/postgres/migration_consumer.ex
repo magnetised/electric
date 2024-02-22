@@ -18,6 +18,7 @@ defmodule Electric.Replication.Postgres.MigrationConsumer do
   alias Electric.Replication.Changes.{NewRecord, Transaction}
   alias Electric.Replication.Connectors
   alias Electric.Replication.Postgres.Client
+  alias Electric.Satellite.Permissions
 
   alias Electric.Telemetry.Metrics
 
@@ -59,6 +60,8 @@ defmodule Electric.Replication.Postgres.MigrationConsumer do
       |> SchemaLoader.get(:backend, SchemaCache)
       |> SchemaLoader.connect(conn_config)
 
+    permissions_consumer = Permissions.Consumer.new(loader)
+
     refresh_sub? = Keyword.get(opts, :refresh_subscription, true)
 
     Logger.info("Starting #{__MODULE__} using #{elem(loader, 0)} backend")
@@ -69,6 +72,7 @@ defmodule Electric.Replication.Postgres.MigrationConsumer do
       subscription: subscription,
       producer: producer,
       loader: loader,
+      permissions: permissions_consumer,
       opts: opts,
       refresh_subscription: refresh_sub?,
       refresh_enum_types: Keyword.get(opts, :refresh_enum_types, true),

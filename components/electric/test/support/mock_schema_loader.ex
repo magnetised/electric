@@ -7,6 +7,13 @@ defmodule Electric.Postgres.MockSchemaLoader do
 
   alias Electric.Satellite.SatPerms
 
+  defmacro __using__(_opts) do
+    quote do
+      alias Electric.Postgres.MockSchemaLoader
+      alias Electric.Postgres.Extension.SchemaLoader
+    end
+  end
+
   defstruct versions: [], opts: [], global_perms: [], user_perms: []
 
   def oid_loader(type, schema, name) do
@@ -48,7 +55,7 @@ defmodule Electric.Postgres.MockSchemaLoader do
 
   def start_link(opts, args \\ []) do
     {module, spec} = agent_spec(opts, args)
-    {:ok, state} = connect([], spec)
+    {:ok, state} = connect(spec, [])
     {module, state}
   end
 
@@ -181,12 +188,12 @@ defmodule Electric.Postgres.MockSchemaLoader do
 
   @behaviour SchemaLoader
 
-  @impl true
-  def connect(_conn_config, {:agent, pid}) do
+  @impl SchemaLoader
+  def connect({:agent, pid}, _conn_config) do
     {:ok, {:agent, pid}}
   end
 
-  def connect(conn_config, {:agent, opts, args}) do
+  def connect({:agent, opts, args}, conn_config) do
     name = Keyword.get(args, :name)
     pid = name && GenServer.whereis(name)
 
@@ -194,14 +201,14 @@ defmodule Electric.Postgres.MockSchemaLoader do
       # use existing agent
       {:ok, {:agent, name}}
     else
-      with {:ok, conn} <- connect(conn_config, opts),
+      with {:ok, conn} <- connect(opts, conn_config),
            {:ok, pid} <- Agent.start_link(fn -> conn end, args) do
         {:ok, {:agent, name || pid}}
       end
     end
   end
 
-  def connect(conn_config, opts) do
+  def connect(opts, conn_config) do
     {versions, opts} =
       opts
       |> Map.new()
@@ -211,7 +218,7 @@ defmodule Electric.Postgres.MockSchemaLoader do
     {:ok, %__MODULE__{versions: versions, opts: opts}}
   end
 
-  @impl true
+  @impl SchemaLoader
   def load({:agent, pid}) do
     Agent.get(pid, &load/1)
   end
@@ -226,7 +233,7 @@ defmodule Electric.Postgres.MockSchemaLoader do
     {:ok, SchemaLoader.Version.new(version, schema)}
   end
 
-  @impl true
+  @impl SchemaLoader
   def load({:agent, pid}, version) do
     Agent.get(pid, &load(&1, version))
   end
@@ -243,7 +250,7 @@ defmodule Electric.Postgres.MockSchemaLoader do
     end
   end
 
-  @impl true
+  @impl SchemaLoader
   def save({:agent, pid}, version, schema, stmts) do
     with :ok <-
            Agent.update(pid, fn state ->
@@ -261,7 +268,7 @@ defmodule Electric.Postgres.MockSchemaLoader do
      SchemaLoader.Version.new(version, schema)}
   end
 
-  @impl true
+  @impl SchemaLoader
   def relation_oid({:agent, pid}, type, schema, name) do
     Agent.get(pid, &relation_oid(&1, type, schema, name))
   end
@@ -282,7 +289,7 @@ defmodule Electric.Postgres.MockSchemaLoader do
     end
   end
 
-  @impl true
+  @impl SchemaLoader
   def refresh_subscription({:agent, pid}, name) do
     Agent.get(pid, &refresh_subscription(&1, name))
   end
@@ -292,7 +299,7 @@ defmodule Electric.Postgres.MockSchemaLoader do
     :ok
   end
 
-  @impl true
+  @impl SchemaLoader
   def migration_history({:agent, pid}, after_version) do
     Agent.get(pid, &migration_history(&1, after_version))
   end
@@ -312,7 +319,7 @@ defmodule Electric.Postgres.MockSchemaLoader do
     {:ok, migrations}
   end
 
-  @impl true
+  @impl SchemaLoader
   def known_migration_version?({:agent, pid}, version) do
     Agent.get(pid, &known_migration_version?(&1, version))
   end
@@ -323,7 +330,7 @@ defmodule Electric.Postgres.MockSchemaLoader do
     Enum.any?(versions, &(&1.version == version))
   end
 
-  @impl true
+  @impl SchemaLoader
   def internal_schema(_state) do
     Schema.new()
   end
@@ -340,7 +347,7 @@ defmodule Electric.Postgres.MockSchemaLoader do
     {:ok, []}
   end
 
-  @impl true
+  @impl SchemaLoader
   def table_electrified?({:agent, pid}, {schema, name}) do
     Agent.get(pid, &table_electrified?(&1, {schema, name}))
   end
@@ -355,7 +362,7 @@ defmodule Electric.Postgres.MockSchemaLoader do
     end
   end
 
-  @impl true
+  @impl SchemaLoader
   def index_electrified?({:agent, pid}, {schema, name}) do
     Agent.get(pid, &index_electrified?(&1, {schema, name}))
   end
@@ -376,7 +383,7 @@ defmodule Electric.Postgres.MockSchemaLoader do
     :ok
   end
 
-  @impl true
+  @impl SchemaLoader
   def tx_version({:agent, pid}, row) do
     Agent.get(pid, &tx_version(&1, row))
   end
@@ -409,7 +416,11 @@ defmodule Electric.Postgres.MockSchemaLoader do
     end
   end
 
-  @impl true
+  @impl SchemaLoader
+  def global_permissions({:agent, pid}) do
+    Agent.get(pid, &global_permissions(&1))
+  end
+
   def global_permissions(%{global_perms: []}) do
     {:ok, initial_global_perms()}
   end
@@ -418,7 +429,39 @@ defmodule Electric.Postgres.MockSchemaLoader do
     {:ok, perms}
   end
 
-  @impl true
+  @impl SchemaLoader
+  def global_permissions({:agent, pid}, id) do
+    Agent.get(pid, &global_permissions(&1, id))
+  end
+
+  def global_permissions(%{global_perms: []}, 1) do
+    {:ok, initial_global_perms()}
+  end
+
+  def global_permissions(%{global_perms: []}, id) do
+    {:error, "global perms with id #{id} not found"}
+  end
+
+  def global_permissions(%{global_perms: perms}, id) do
+    case Enum.find(perms, &(&1.id == id)) do
+      nil -> {:error, "global perms with id #{id} not found"}
+      perms -> {:ok, perms}
+    end
+  end
+
+  @impl SchemaLoader
+  def user_permissions({:agent, pid}, user_id) do
+    Agent.get_and_update(pid, fn state ->
+      case user_permissions(state, user_id) do
+        {:ok, state, perms} ->
+          {{:ok, {:agent, pid}, perms}, state}
+
+        error ->
+          {error, state}
+      end
+    end)
+  end
+
   def user_permissions(%{user_perms: user_perms} = state, user_id) do
     case(Enum.find(user_perms, &(&1.user_id == user_id))) do
       nil ->
@@ -433,7 +476,11 @@ defmodule Electric.Postgres.MockSchemaLoader do
     end
   end
 
-  @impl true
+  @impl SchemaLoader
+  def user_permissions({:agent, pid}, user_id, perms_id) do
+    Agent.get(pid, &user_permissions(&1, user_id, perms_id))
+  end
+
   def user_permissions(%{user_perms: user_perms}, user_id, perms_id) do
     case(Enum.find(user_perms, &(&1.user_id == user_id && &1.id == perms_id))) do
       nil ->
@@ -444,12 +491,36 @@ defmodule Electric.Postgres.MockSchemaLoader do
     end
   end
 
-  @impl true
+  @impl SchemaLoader
+  def save_global_permissions({:agent, pid}, rules) do
+    Agent.get_and_update(pid, fn state ->
+      case save_global_permissions(state, rules) do
+        {:ok, state} ->
+          {{:ok, {:agent, pid}}, state}
+
+        error ->
+          {error, state}
+      end
+    end)
+  end
+
   def save_global_permissions(%{global_perms: global_perms} = state, %SatPerms.Rules{} = rules) do
     {:ok, %{state | global_perms: [rules | global_perms]}}
   end
 
-  @impl true
+  @impl SchemaLoader
+  def save_user_permissions({:agent, pid}, user_id, roles) do
+    Agent.get_and_update(pid, fn state ->
+      case save_user_permissions(state, user_id, roles) do
+        {:ok, state, perms} ->
+          {{:ok, {:agent, pid}, perms}, state}
+
+        error ->
+          {error, state}
+      end
+    end)
+  end
+
   def save_user_permissions(%{user_perms: user_perms} = state, user_id, %SatPerms.Roles{} = perms) do
     %{rules_id: rules_id, parent_id: parent_id, roles: roles} = perms
 

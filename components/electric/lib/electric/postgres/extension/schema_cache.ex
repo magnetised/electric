@@ -71,7 +71,7 @@ defmodule Electric.Postgres.Extension.SchemaCache do
   end
 
   @impl SchemaLoader
-  def connect(conn_config, _opts) do
+  def connect(_opts, conn_config) do
     {:ok, Connectors.origin(conn_config)}
   end
 
@@ -153,6 +153,11 @@ defmodule Electric.Postgres.Extension.SchemaCache do
   @impl SchemaLoader
   def global_permissions(origin) do
     call(origin, :global_permissions)
+  end
+
+  @impl SchemaLoader
+  def global_permissions(origin, id) do
+    call(origin, {:global_permissions, id})
   end
 
   @impl SchemaLoader
@@ -399,6 +404,10 @@ defmodule Electric.Postgres.Extension.SchemaCache do
 
   def handle_call(:global_permissions, _from, state) do
     {:reply, SchemaLoader.global_permissions(state.backend), state}
+  end
+
+  def handle_call({:global_permissions, id}, _from, state) do
+    {:reply, SchemaLoader.global_permissions(state.backend, id), state}
   end
 
   def handle_call({:save_global_permissions, rules}, _from, state) do

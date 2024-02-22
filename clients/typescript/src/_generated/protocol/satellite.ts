@@ -637,7 +637,7 @@ export interface SatPerms_Path {
 export interface SatPerms_Scope {
   $type: "Electric.Satellite.SatPerms.Scope";
   table: SatPerms_Table | undefined;
-  id: string;
+  id: string[];
 }
 
 export interface SatPerms_RoleName {
@@ -701,7 +701,7 @@ export interface SatPerms_Sqlite {
 
 export interface SatPerms_Role {
   $type: "Electric.Satellite.SatPerms.Role";
-  id: string;
+  rowId: string[];
   role: string;
   userId: string;
   assignId: string;
@@ -4002,7 +4002,7 @@ export const SatPerms_Path = {
 messageTypeRegistry.set(SatPerms_Path.$type, SatPerms_Path);
 
 function createBaseSatPerms_Scope(): SatPerms_Scope {
-  return { $type: "Electric.Satellite.SatPerms.Scope", table: undefined, id: "" };
+  return { $type: "Electric.Satellite.SatPerms.Scope", table: undefined, id: [] };
 }
 
 export const SatPerms_Scope = {
@@ -4012,8 +4012,8 @@ export const SatPerms_Scope = {
     if (message.table !== undefined) {
       SatPerms_Table.encode(message.table, writer.uint32(10).fork()).ldelim();
     }
-    if (message.id !== "") {
-      writer.uint32(18).string(message.id);
+    for (const v of message.id) {
+      writer.uint32(18).string(v!);
     }
     return writer;
   },
@@ -4037,7 +4037,7 @@ export const SatPerms_Scope = {
             break;
           }
 
-          message.id = reader.string();
+          message.id.push(reader.string());
           continue;
       }
       if ((tag & 7) === 4 || tag === 0) {
@@ -4057,7 +4057,7 @@ export const SatPerms_Scope = {
     message.table = (object.table !== undefined && object.table !== null)
       ? SatPerms_Table.fromPartial(object.table)
       : undefined;
-    message.id = object.id ?? "";
+    message.id = object.id?.map((e) => e) || [];
     return message;
   },
 };
@@ -4740,15 +4740,15 @@ export const SatPerms_Sqlite = {
 messageTypeRegistry.set(SatPerms_Sqlite.$type, SatPerms_Sqlite);
 
 function createBaseSatPerms_Role(): SatPerms_Role {
-  return { $type: "Electric.Satellite.SatPerms.Role", id: "", role: "", userId: "", assignId: "", scope: undefined };
+  return { $type: "Electric.Satellite.SatPerms.Role", rowId: [], role: "", userId: "", assignId: "", scope: undefined };
 }
 
 export const SatPerms_Role = {
   $type: "Electric.Satellite.SatPerms.Role" as const,
 
   encode(message: SatPerms_Role, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
-    if (message.id !== "") {
-      writer.uint32(10).string(message.id);
+    for (const v of message.rowId) {
+      writer.uint32(10).string(v!);
     }
     if (message.role !== "") {
       writer.uint32(18).string(message.role);
@@ -4777,7 +4777,7 @@ export const SatPerms_Role = {
             break;
           }
 
-          message.id = reader.string();
+          message.rowId.push(reader.string());
           continue;
         case 2:
           if (tag !== 18) {
@@ -4822,7 +4822,7 @@ export const SatPerms_Role = {
 
   fromPartial<I extends Exact<DeepPartial<SatPerms_Role>, I>>(object: I): SatPerms_Role {
     const message = createBaseSatPerms_Role();
-    message.id = object.id ?? "";
+    message.rowId = object.rowId?.map((e) => e) || [];
     message.role = object.role ?? "";
     message.userId = object.userId ?? "";
     message.assignId = object.assignId ?? "";

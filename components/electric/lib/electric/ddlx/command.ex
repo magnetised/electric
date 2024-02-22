@@ -222,54 +222,19 @@ defimpl Electric.DDLX.Command.PgSQL, for: SatPerms.Revoke do
 end
 
 defimpl Electric.DDLX.Command.PgSQL, for: SatPerms.Assign do
-  import Electric.DDLX.Command.Common
-
-  def to_sql(%SatPerms.Assign{} = assign) do
-    id = Electric.DDLX.Command.command_id(assign)
-
-    [
-      """
-      CALL electric.assign(
-        assignment_id => #{sql_repr(id)},
-        assign_table_full_name => #{sql_repr(assign.table)},
-        scope => #{sql_repr(assign.scope)},
-        user_column_name => #{sql_repr(assign.user_column)},
-        role_name_string => #{sql_repr(assign.role_name)},
-        role_column_name => #{sql_repr(assign.role_column)},
-        if_fn => #{sql_repr(assign.if)}
-      );
-      """
-    ]
+  def to_sql(%SatPerms.Assign{} = _assign) do
+    []
   end
 end
 
 defimpl Electric.DDLX.Command.PgSQL, for: SatPerms.Unassign do
-  import Electric.DDLX.Command.Common
-
-  def to_sql(%SatPerms.Unassign{} = unassign) do
-    id = Electric.DDLX.Command.command_id(unassign)
-
-    [
-      """
-      CALL electric.unassign(
-        assignment_id => #{sql_repr(id)},
-        assign_table_full_name => #{sql_repr(unassign.table)},
-        scope => #{sql_repr(unassign.scope)},
-        user_column_name => #{sql_repr(unassign.user_column)},
-        role_name_string => #{sql_repr(unassign.role_name)},
-        role_column_name => #{sql_repr(unassign.role_column)}
-      );
-      """
-    ]
+  def to_sql(%SatPerms.Unassign{} = _unassign) do
+    []
   end
 end
 
 defimpl Electric.DDLX.Command.PgSQL, for: SatPerms.Sqlite do
-  def to_sql(%SatPerms.Sqlite{stmt: stmt}) when is_binary(stmt) do
-    [
-      """
-      CALL electric.sqlite(sql => $sqlite$#{stmt}$sqlite$);
-      """
-    ]
+  def to_sql(%SatPerms.Sqlite{} = _sqlite) do
+    []
   end
 end

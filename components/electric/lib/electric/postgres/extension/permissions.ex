@@ -5,10 +5,19 @@ defmodule Electric.Postgres.Extension.Permissions do
   @global_perms_table Extension.global_perms_table()
   @user_perms_table Extension.user_perms_table()
 
+  @shared_global_query """
+    SELECT "id", "parent_id", "rules" FROM #{@global_perms_table}
+  """
+
   @current_global_query """
-    SELECT "id", "parent_id", "rules"
-        FROM #{@global_perms_table}
+    #{@shared_global_query}
         ORDER BY "id" DESC
+        LIMIT 1
+  """
+
+  @specific_global_query """
+    #{@shared_global_query}
+        WHERE id = $1
         LIMIT 1
   """
 
@@ -34,9 +43,24 @@ defmodule Electric.Postgres.Extension.Permissions do
         LIMIT 1
   """
 
+  # we need to duplicate all the current user perms that, which all depend on the previous version
+  # of the global rules this query is complicated by the need to only select the most current
+  # version of each user's permissions (because for a given rules id, a user may have multiple
+  # versions of their roles)
   @save_global_query """
-    INSERT INTO #{@global_perms_table} ("id", "parent_id", "rules")
-        VALUES ($1, $2, $3)
+    WITH global_perms AS (
+      INSERT INTO #{@global_perms_table} (id, parent_id, rules)
+          VALUES ($1, $2, $3) RETURNING id, parent_id
+    )
+    INSERT INTO #{@user_perms_table} (user_id, parent_id, roles, global_perms_id)
+        SELECT u.*, global_perms.id FROM
+          (SELECT DISTINCT user_id FROM #{@user_perms_table} ORDER BY user_id) uid
+          JOIN LATERAL (
+            SELECT ui.user_id, ui.id, ui.roles FROM #{@user_perms_table} ui
+            WHERE ui.user_id = uid.user_id
+            ORDER BY ui.id DESC
+            LIMIT 1
+        ) u ON TRUE, global_perms
   """
 
   @create_user_query """
@@ -47,14 +71,14 @@ defmodule Electric.Postgres.Extension.Permissions do
         LIMIT 1
     ), user_perms AS (
         INSERT INTO #{@user_perms_table} (user_id, parent_id, roles, global_perms_id)
-        SELECT $1, $2, $3, id FROM global_perms
+        SELECT $1, $2, $3, g.id
+        FROM global_perms g
         RETURNING id
     )
     SELECT user_perms.id AS user_id,
            global_perms.id AS global_id,
            global_perms.rules
-        FROM user_perms
-        CROSS JOIN global_perms
+        FROM user_perms, global_perms
   """
 
   def global(conn) do
@@ -64,10 +88,17 @@ defmodule Electric.Postgres.Extension.Permissions do
     end
   end
 
+  def global(conn, id) do
+    with {:ok, _cols, [row]} <- :epgsql.equery(conn, @specific_global_query, [id]),
+         {_id, _parent_id, bytes} = row do
+      Protox.decode(bytes, SatPerms.Rules)
+    end
+  end
+
   def save_global(conn, %SatPerms.Rules{id: id, parent_id: parent_id} = rules) do
     with {:ok, iodata} <- Protox.encode(rules),
          bytes = IO.iodata_to_binary(iodata),
-         {:ok, 1} <- :epgsql.equery(conn, @save_global_query, [id, parent_id, bytes]) do
+         {:ok, _users} <- :epgsql.equery(conn, @save_global_query, [id, parent_id, bytes]) do
       :ok
     end
   end

@@ -2,25 +2,58 @@ defmodule Electric.Satellite.Permissions.Consumer do
   alias Electric.DDLX.Command
   alias Electric.Satellite.SatPerms
   alias Electric.Postgres.Extension.SchemaLoader
-  alias Electric.Postgres.NameParser
   alias Electric.Replication.Changes
   alias Electric.Postgres.Extension
+  alias Electric.Satellite.Permissions.Trigger
 
-  @electric_roles Extension.roles_relation()
   @electric_ddlx Extension.ddlx_relation()
 
-  def update(%Changes.Transaction{changes: changes} = tx, loader) do
+  @enforce_keys [:rules, :schema]
+
+  defstruct [:rules, :schema, triggers: %{}]
+
+  @type name() :: Electric.Postgres.name()
+  @type trigger_fun() ::
+          (Changes.change(), SchemaLoader.t() -> {[Changes.change()], SchemaLoader.t()})
+
+  @type t() :: %__MODULE__{
+          rules: %SatPerms.Rules{},
+          schema: SchemaLoader.Version.t(),
+          triggers: %{Electric.Postgres.relation() => trigger_fun()}
+        }
+
+  @doc """
+  Creates a new permissions consumer state, based on the current global rules and the current schema version.
+  """
+  @spec new(SchemaLoader.t()) :: {:ok, t()} | {:error, binary()}
+  def new(loader) do
+    with {:ok, schema_version} <- SchemaLoader.load(loader),
+         {:ok, rules} <- SchemaLoader.global_permissions(loader) do
+      {:ok, create_triggers(%__MODULE__{rules: rules, schema: schema_version})}
+    end
+  end
+
+  defp create_triggers(state) do
+    triggers =
+      Trigger.create_triggers(state.rules.assigns, state.schema, &update_roles_callback/3)
+
+    %{state | triggers: triggers}
+  end
+
+  def update(%Changes.Transaction{changes: changes} = tx, state, loader) do
     # group changes by relation -- this is really only to avoid churn on the global permissions
     # rules which is an expensive operation. by grouping on the relation we can transform a series
     # of ddlx permission commands into a single update to the global permissions struct
-    {changes, loader} =
+    {changes, {state, loader}} =
       changes
       |> Enum.chunk_by(& &1.relation)
-      |> Enum.flat_map_reduce(loader, &apply_changes/2)
+      |> Enum.flat_map_reduce({state, loader}, &apply_changes/2)
 
-    {:ok, %{tx | changes: changes}, loader}
+    {:ok, %{tx | changes: changes}, state, loader}
   end
 
+  # useful function for testing creation of global state
+  @doc false
   def update_global(%SatPerms.DDLX{} = ddlx, loader) do
     with {:ok, rules} <- SchemaLoader.global_permissions(loader) do
       case mutate_global(ddlx, rules) do
@@ -35,29 +68,28 @@ defmodule Electric.Satellite.Permissions.Consumer do
     end
   end
 
-  defp apply_changes([%{relation: @electric_ddlx} | _] = changes, loader) do
+  defp apply_changes([%{relation: @electric_ddlx} | _] = changes, {state, loader}) do
     {:ok, rules} = SchemaLoader.global_permissions(loader)
 
     case Enum.reduce(changes, {rules, 0}, &apply_global_change/2) do
       {_rules, 0} ->
-        {[], loader}
+        {[], {state, loader}}
 
       {rules, _count} ->
         {:ok, loader} = SchemaLoader.save_global_permissions(loader, rules)
 
         {
           [updated_global_permissions(rules)],
-          loader
+          {create_triggers(%{state | rules: rules}), loader}
         }
     end
   end
 
-  defp apply_changes([%{relation: @electric_roles} | _] = changes, loader) do
-    Enum.flat_map_reduce(changes, loader, &apply_user_change/2)
-  end
+  defp apply_changes(changes, {state, loader}) do
+    {changes, {_triggers, loader}} =
+      Enum.flat_map_reduce(changes, {state.triggers, loader}, &apply_triggers/2)
 
-  defp apply_changes(changes, loader) do
-    {changes, loader}
+    {changes, {state, loader}}
   end
 
   # the ddlx table is insert-only
@@ -68,47 +100,95 @@ defmodule Electric.Satellite.Permissions.Consumer do
     mutate_global(ddlx, rules, count)
   end
 
-  defp apply_user_change(%Changes.NewRecord{} = change, loader) do
-    %{record: %{"user_id" => user_id} = record} = change
-    {:ok, loader, perms} = mutate_user_perms(record, user_id, loader, &insert_role/2)
+  defp apply_triggers(change, {triggers, loader}) do
+    {changes, loader} =
+      Trigger.apply(change, triggers, loader)
+
+    {changes, {triggers, loader}}
+  end
+
+  defp update_roles_callback({:insert, role}, change, loader) do
+    {:ok, loader, perms} = mutate_user_perms(role, loader, &insert_role/2)
 
     {
-      [updated_user_permissions(user_id, perms)],
+      [
+        change,
+        updated_user_permissions(role.user_id, perms)
+      ],
       loader
     }
   end
 
-  defp apply_user_change(%Changes.DeletedRecord{} = change, loader) do
-    %{old_record: %{"user_id" => user_id} = record} = change
-    {:ok, loader, perms} = mutate_user_perms(record, user_id, loader, &delete_role/2)
+  defp update_roles_callback({:update, old_role, new_role}, change, loader) do
+    if old_role.user_id == new_role.user_id do
+      {:ok, loader, perms} = mutate_user_perms(new_role, loader, &update_role/2)
+
+      {
+        [
+          change,
+          updated_user_permissions(new_role.user_id, perms)
+        ],
+        loader
+      }
+    else
+      {:ok, loader, old_perms} = mutate_user_perms(old_role, loader, &delete_role/2)
+      {:ok, loader, new_perms} = mutate_user_perms(new_role, loader, &insert_role/2)
+
+      {
+        [
+          change,
+          updated_user_permissions(old_role.user_id, old_perms),
+          updated_user_permissions(new_role.user_id, new_perms)
+        ],
+        loader
+      }
+    end
+  end
+
+  defp update_roles_callback({:delete, role}, change, loader) do
+    {:ok, loader, perms} = mutate_user_perms(role, loader, &delete_role/2)
 
     {
-      [updated_user_permissions(user_id, perms)],
+      [
+        change,
+        updated_user_permissions(role.user_id, perms)
+      ],
       loader
     }
   end
 
-  defp apply_user_change(%Changes.UpdatedRecord{} = change, loader) do
-    case change do
-      %{old_record: %{"user_id" => user_id}, record: %{"user_id" => user_id} = record} ->
-        {:ok, loader, perms} = mutate_user_perms(record, user_id, loader, &update_role/2)
+  defp mutate_user_perms(role, loader, update_fun) do
+    with {:ok, loader, perms} <- SchemaLoader.user_permissions(loader, role.user_id),
+         {:ok, roles} <- update_fun.(perms, role) do
+      {:ok, _loader, _perms} = SchemaLoader.save_user_permissions(loader, role.user_id, roles)
+    end
+  end
 
-        {
-          [updated_user_permissions(user_id, perms)],
-          loader
-        }
+  defp insert_role(perms, new_role) do
+    with roles <- load_roles(perms) do
+      {:ok, Map.update!(roles, :roles, &[new_role | &1])}
+    end
+  end
 
-      %{old_record: %{"user_id" => user_id1}, record: %{"user_id" => user_id2} = record} ->
-        {:ok, loader, perms1} = mutate_user_perms(record, user_id1, loader, &delete_role/2)
-        {:ok, loader, perms2} = mutate_user_perms(record, user_id2, loader, &insert_role/2)
+  defp update_role(perms, new_role) do
+    with roles <- load_roles(perms) do
+      {:ok,
+       Map.update!(
+         roles,
+         :roles,
+         &Enum.map(&1, fn role -> if role_match?(role, new_role), do: new_role, else: role end)
+       )}
+    end
+  end
 
-        {
-          [
-            updated_user_permissions(user_id1, perms1),
-            updated_user_permissions(user_id2, perms2)
-          ],
-          loader
-        }
+  defp delete_role(perms, new_role) do
+    with roles <- load_roles(perms) do
+      {:ok,
+       Map.update!(
+         roles,
+         :roles,
+         &Enum.reject(&1, fn role -> role_match?(role, new_role) end)
+       )}
     end
   end
 
@@ -126,79 +206,18 @@ defmodule Electric.Satellite.Permissions.Consumer do
     {apply_ddlx(rules, ddlx, count == 0), count + count_changes(ddlx)}
   end
 
-  defp mutate_user_perms(record, user_id, loader, update_fun) do
-    with {:ok, loader, perms} <- SchemaLoader.user_permissions(loader, user_id),
-         {:ok, roles} <- update_fun.(perms, record) do
-      {:ok, _loader, _perms} = SchemaLoader.save_user_permissions(loader, user_id, roles)
-    end
+  def role_match?(role1, role2) do
+    role1.assign_id == role2.assign_id && role1.row_id == role2.row_id
   end
 
-  defp insert_role(perms, record) do
-    with {:ok, new_role, roles} <- load_roles(perms, record) do
-      {:ok, Map.update!(roles, :roles, &[new_role | &1])}
-    end
-  end
-
-  defp update_role(perms, record) do
-    with {:ok, new_role, roles} <- load_roles(perms, record) do
-      {:ok,
-       Map.update!(
-         roles,
-         :roles,
-         &Enum.map(&1, fn role -> if role.id == new_role.id, do: new_role, else: role end)
-       )}
-    end
-  end
-
-  defp delete_role(perms, record) do
-    with {:ok, new_role, roles} <- load_roles(perms, record) do
-      {:ok,
-       Map.update!(
-         roles,
-         :roles,
-         &Enum.reject(&1, fn role -> role.id == new_role.id end)
-       )}
-    end
-  end
-
-  defp load_roles(perms, record) do
+  defp load_roles(perms) do
     %{id: id, roles: role_list, rules: %{id: rules_id}} = perms
 
-    with {:ok, role} <- role_from_record(record) do
-      roles = %SatPerms.Roles{
-        parent_id: id,
-        rules_id: rules_id,
-        roles: role_list
-      }
-
-      {:ok, role, roles}
-    end
-  end
-
-  defp role_from_record(record) do
-    %{
-      "id" => id,
-      "scope_table" => scope_table,
-      "scope_id" => scope_id,
-      "role" => role,
-      "assignment_id" => assign_id,
-      "user_id" => user_id
-    } = record
-
-    with {:ok, scope} <- role_scope(scope_table, scope_id) do
-      {:ok,
-       %SatPerms.Role{id: id, role: role, user_id: user_id, assign_id: assign_id, scope: scope}}
-    end
-  end
-
-  defp role_scope(nil, _) do
-    {:ok, nil}
-  end
-
-  defp role_scope(scope_table, scope_id) when is_binary(scope_table) do
-    with {:ok, {schema, name}} = NameParser.parse(scope_table) do
-      {:ok, %SatPerms.Scope{table: %SatPerms.Table{schema: schema, name: name}, id: scope_id}}
-    end
+    %SatPerms.Roles{
+      parent_id: id,
+      rules_id: rules_id,
+      roles: role_list
+    }
   end
 
   @doc """
@@ -209,8 +228,8 @@ defmodule Electric.Satellite.Permissions.Consumer do
   Thus the order they are applied in a migration is preserved by the ordering of the arrival of
   the DDLX structs through the replication stream.
 
-  Since each struct's id is fingerprint that specifies the a kind of primary key, we just need to
-  operate on the existing rules keyed by this id.
+  Since each struct's id is a fingerprint that acts as a primary key, we just need to operate on
+  the existing rules keyed by this id.
   """
   @spec apply_ddlx(%SatPerms.Rules{}, %SatPerms.DDLX{}) :: %SatPerms.Rules{}
   def apply_ddlx(rules, ddlx, is_first? \\ true)

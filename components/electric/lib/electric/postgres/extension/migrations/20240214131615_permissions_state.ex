@@ -8,10 +8,12 @@ defmodule Electric.Postgres.Extension.Migrations.Migration_20240214131615_Permis
   def version, do: 2024_02_14_13_16_15
 
   @impl true
-  def up(_schema) do
+  def up(schema) do
     global_perms_table = Extension.global_perms_table()
     user_perms_table = Extension.user_perms_table()
     roles_table = Extension.roles_table()
+    grants_table = Extension.grants_table()
+    assignments_table = Extension.assignments_table()
 
     empty_rules =
       %SatPerms.Rules{id: 1} |> Protox.encode!() |> IO.iodata_to_binary() |> Base.encode16()
@@ -48,7 +50,37 @@ defmodule Electric.Postgres.Extension.Migrations.Migration_20240214131615_Permis
       INSERT INTO #{global_perms_table} (id, rules) VALUES (1, '\\x#{empty_rules}'::bytea)
       """,
       """
-      ALTER TABLE #{roles_table} ADD COLUMN assignment_id text NOT NULL;
+      DROP TABLE IF EXISTS #{roles_table} CASCADE
+      """,
+      """
+      DROP TABLE IF EXISTS #{grants_table} CASCADE
+      """,
+      """
+      DROP TABLE IF EXISTS #{assignments_table} CASCADE
+      """,
+      """
+      DROP PROCEDURE IF EXISTS #{schema}.assign;
+      """,
+      """
+      DROP PROCEDURE IF EXISTS #{schema}.unassign;
+      """,
+      """
+      DROP PROCEDURE IF EXISTS #{schema}.grant;
+      """,
+      """
+      DROP PROCEDURE IF EXISTS #{schema}.revoke;
+      """,
+      """
+      DROP PROCEDURE IF EXISTS #{schema}.sqlite;
+      """,
+      """
+      DROP FUNCTION IF EXISTS #{schema}.find_fk_to_table;
+      """,
+      """
+      DROP FUNCTION IF EXISTS #{schema}.find_fk_for_column;
+      """,
+      """
+      DROP FUNCTION IF EXISTS #{schema}.find_pk;
       """
     ]
   end
