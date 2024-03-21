@@ -62,7 +62,7 @@ defmodule Electric.Replication.Eval.Runner do
   defp try_apply(%Func{implementation: impl} = func, args) do
     case impl do
       {module, fun} -> apply(module, fun, args)
-      fun -> apply(fun, args)
+      fun when is_function(fun) -> apply(fun, args)
     end
   rescue
     _ ->

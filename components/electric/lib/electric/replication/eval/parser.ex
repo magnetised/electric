@@ -333,8 +333,12 @@ defmodule Electric.Replication.Eval.Parser do
         {:ok, :as_is}
 
       :error ->
-        with {:ok, [%{args: [^from_type]} = impl]} <- Map.fetch(env.funcs, out_func) do
-          {:ok, impl}
+        case Map.fetch(env.funcs, out_func) do
+          {:ok, [%{args: [^from_type], implementation: impl}]} when is_function(impl) ->
+            {:ok, impl}
+
+          _ ->
+            :error
         end
     end
   end
