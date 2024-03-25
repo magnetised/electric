@@ -4,6 +4,9 @@ defmodule Electric.Replication.Eval.Runner do
   alias Electric.Replication.Eval.Env
   alias Electric.Replication.Eval.Parser.{Const, Func, Ref}
 
+  @type value() :: binary() | integer() | float() | boolean()
+  @type val_map() :: %{optional([String.t(), ...]) => value()}
+
   @doc """
   Generate a ref values object based on the record and a given table name
   """

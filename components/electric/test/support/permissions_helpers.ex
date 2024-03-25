@@ -94,6 +94,20 @@ defmodule ElectricTest.PermissionsHelpers do
               role text not null,
               foreign key (root_id1, root_id2) references compound_root (id1, id2)
            )
+           """,
+           """
+           create table lotsoftypes (
+             id uuid primary key,
+             user_id uuid not null,
+             parent_id uuid not null,
+             name text,
+             value text,
+             amount integer,
+             valid bool,
+             ilist integer[],
+             slist text[],
+             inserted_at timestamp with time zone
+           )
            """
          ]}
       ]
