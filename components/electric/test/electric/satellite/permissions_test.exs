@@ -1317,6 +1317,87 @@ defmodule Electric.Satellite.PermissionsTest do
     end
   end
 
+  # TODO: implement where clauses on client side
+  for module <- [PermissionsHelpers.Server] do
+    describe "#{module.name()}: where clauses" do
+      setup(cxt) do
+        {:ok, cxt} = unquote(module).setup(cxt)
+        {:ok, Map.put(Map.new(cxt), :module, unquote(module))}
+      end
+
+      test "simple user_id", cxt do
+        perms =
+          cxt.module.perms(
+            cxt,
+            [
+              ~s[GRANT ALL ON #{table(@comments)} TO AUTHENTICATED WHERE (row.author_id::text = auth.user_id)]
+            ],
+            []
+          )
+
+        assert_write_rejected(
+          cxt.module.validate_write(
+            perms,
+            cxt.tree,
+            Chgs.tx([
+              Chgs.insert(@comments, %{
+                "id" => "c100",
+                "issue_id" => "i3",
+                "author_id" => "78c4d92e-a0a7-4c6a-b25a-44e26eb33e4c"
+              })
+            ])
+          )
+        )
+
+        assert {:ok, _perms} =
+                 cxt.module.validate_write(
+                   perms,
+                   cxt.tree,
+                   Chgs.tx([
+                     Chgs.insert(@comments, %{
+                       "id" => "c100",
+                       "issue_id" => "i3",
+                       "author_id" => Auth.user_id()
+                     })
+                   ])
+                 )
+
+        assert {:ok, _perms} =
+                 cxt.module.validate_write(
+                   perms,
+                   cxt.tree,
+                   # issue i3 belongs to project p2
+                   Chgs.tx([
+                     Chgs.update(
+                       @comments,
+                       %{"id" => "c4", "issue_id" => "i3", "author_id" => Auth.user_id()},
+                       %{
+                         "comment" => "changed"
+                       }
+                     )
+                   ])
+                 )
+
+        assert_write_rejected(
+          cxt.module.validate_write(
+            perms,
+            cxt.tree,
+            # issue i3 belongs to project p2
+            Chgs.tx([
+              Chgs.update(
+                @comments,
+                %{"id" => "c4", "issue_id" => "i3", "author_id" => Auth.user_id()},
+                %{
+                  "author_id" => "a5158d97-8e45-408d-81c9-f28e2fe4f54c"
+                }
+              )
+            ])
+          )
+        )
+      end
+    end
+  end
+
   describe "transient permissions" do
     setup(cxt) do
       perms =

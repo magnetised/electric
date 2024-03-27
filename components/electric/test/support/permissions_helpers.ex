@@ -12,7 +12,7 @@ defmodule ElectricTest.PermissionsHelpers do
            "create table workspaces (id uuid primary key)",
            "create table projects (id uuid primary key, workspace_id uuid not null references workspaces (id))",
            "create table issues (id uuid primary key, project_id uuid not null references projects (id), description text)",
-           "create table comments (id uuid primary key, issue_id uuid not null references issues (id), comment text, owner text)",
+           "create table comments (id uuid primary key, issue_id uuid not null references issues (id), comment text, owner text, author_id uuid references users (id))",
            "create table reactions (id uuid primary key, comment_id uuid not null references comments (id))",
            "create table users (id uuid primary key, role text not null default 'normie')",
            "create table teams (id uuid primary key)",
@@ -104,6 +104,7 @@ defmodule ElectricTest.PermissionsHelpers do
              value text,
              amount integer,
              valid bool,
+             percent float,
              ilist integer[],
              slist text[],
              inserted_at timestamp with time zone

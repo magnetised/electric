@@ -38,6 +38,7 @@ defmodule Electric.Satellite.Permissions.Client do
 
   import Electric.Satellite.Permissions.Client.Format
 
+  @actions [:insert, :delete, :update]
   @dialect Electric.Satellite.Permissions.Client.SQLite
 
   @doc false
@@ -170,8 +171,7 @@ defmodule Electric.Satellite.Permissions.Client do
 
   defp table_triggers(table, perms, schema) do
     table_grants =
-      perms.source.rules.grants
-      |> Stream.map(&Permissions.Grant.new/1)
+      perms.grants
       # can remove these because if they exist they'll be hard-coded into the tests
       # and this list of grants is only used to test for local roles
       |> Stream.reject(&(&1.role in [:ANYONE, :AUTHENTICATED]))
@@ -267,8 +267,7 @@ defmodule Electric.Satellite.Permissions.Client do
     {:ok, pks} = pks(schema, table)
 
     grants =
-      perms.source.rules.grants
-      |> Stream.map(&Permissions.Grant.new/1)
+      perms.grants
       |> Permissions.Grant.for_table(table)
       |> Permissions.Grant.for_privilege(:UPDATE)
 

@@ -27,7 +27,7 @@ defmodule Electric.Satellite.Permissions.Eval do
         }
 
   defmodule ExpressionContext do
-    defstruct [:auth, :relation, :columns, :expr]
+    defstruct [:query, :auth, :relation, :columns, :expr]
 
     @type t() :: %__MODULE__{
             auth: Runner.val_map(),
@@ -65,10 +65,26 @@ defmodule Electric.Satellite.Permissions.Eval do
   """
   def expression_context(evaluator, query, {_, _} = table) do
     with {:ok, refs} <- refs(evaluator, table),
-         {:ok, expr} <- Parser.parse_and_validate_expression(query, refs),
-         expr_cxt = new_expression_context(evaluator, table) do
+         {:ok, expr} <- Parser.parse_and_validate_expression(query, refs, env()),
+         expr_cxt = new_expression_context(evaluator, query, table) do
       {:ok, struct(expr_cxt, expr: expand_row_aliases(expr))}
     end
+  end
+
+  def env do
+    # allow for implicitly casting from a uuid to a text.
+    # this is useful for permissions tests as our e.g. auth.user_id is a generic text value
+    # (because we don't know what the developer will use as their ids)
+    # and if the db user id fields are uuids, we end up comparing uuid fields with text values.
+    # adding this cast removes the need to add an explicit cast of the uuid column to text everywhere
+    # so we can do `users.id = auth.user_id` rather than `users.id::text = auth.user_id`
+    # Since the cast of a uuid to a text is a "noop", this feels pretty safe.
+    Env.new(implicit_casts: %{{:uuid, :text} => :as_is})
+  end
+
+  def execute!(%ExpressionContext{} = expr_cxt, change) do
+    {:ok, result} = execute(expr_cxt, change)
+    result
   end
 
   def execute(
@@ -112,8 +128,9 @@ defmodule Electric.Satellite.Permissions.Eval do
     Runner.execute(expr, values)
   end
 
-  defp new_expression_context(%__MODULE__{auth: auth, tables: tables}, table) do
+  defp new_expression_context(%__MODULE__{auth: auth, tables: tables}, query, table) do
     struct(ExpressionContext,
+      query: query,
       auth: %{["auth", "user_id"] => auth.user_id},
       relation: table,
       columns: Map.fetch!(tables, table)
@@ -191,6 +208,10 @@ defmodule Electric.Satellite.Permissions.Eval do
 
   defp replace_alias(%Func{} = func, pre) do
     %{func | args: replace_alias(func.args, pre)}
+  end
+
+  defp replace_alias(expr, _pre) do
+    expr
   end
 
   defp uses_alias?(%Func{args: args}), do: Enum.any?(args, &uses_alias?/1)
