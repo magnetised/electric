@@ -416,11 +416,11 @@ defmodule Electric.Satellite.Permissions.Client do
   end
 
   defp column_test(disallowed_columns, :UPDATE) do
-    lines(
+    [
       disallowed_columns
       |> Enum.map(&~s[NEW."#{&1}" IS OLD."#{&1}"])
       |> and_()
-    )
+    ]
   end
 
   defp unscoped_trigger_tests(role_grants, grants, perms, schema, table, action) do
