@@ -1733,5 +1733,77 @@ defmodule Electric.Satellite.PermissionsTest do
 
       assert filtered_tx.changes == expected_changes
     end
+
+    test "where clauses on grant", cxt do
+      perms =
+        perms_build(
+          cxt,
+          [
+            ~s[GRANT ALL ON #{table(@issues)} TO (#{table(@projects)}, 'editor') ],
+            ~s[GRANT ALL ON #{table(@comments)} TO (#{table(@projects)}, 'editor') WHERE (ROW.author_id = auth.user_id)],
+            ~s[GRANT ALL ON #{table(@reactions)} TO (#{table(@projects)}, 'editor') WHERE (ROW.is_public)],
+            @projects_assign
+          ],
+          [
+            Roles.role("editor", @projects, "p1", "assign-1"),
+            Roles.role("editor", @projects, "p2", "assign-1")
+          ]
+        )
+
+      changes = [
+        Chgs.update(@issues, %{"id" => "i1", "project_id" => "p1"}, %{"text" => "updated"}),
+        Chgs.insert(@issues, %{"id" => "i100", "project_id" => "p1"}),
+        Chgs.insert(@issues, %{"id" => "i101", "project_id" => "p2"}),
+        # author_id is us
+        Chgs.update(
+          @comments,
+          %{"id" => "c1", "issue_id" => "i1", "author_id" => Auth.user_id()},
+          %{"text" => "updated"}
+        ),
+        # author is not us, so should be filtered
+        Chgs.update(
+          @comments,
+          %{"id" => "c2", "issue_id" => "i1", "author_id" => Auth.not_user_id()},
+          %{"text" => "updated"}
+        ),
+        # matches the is_public clause
+        Chgs.update(@reactions, %{"id" => "r1", "comment_id" => "c1", "is_public" => true}, %{
+          "text" => "updated"
+        }),
+        # change of is_public fails ROW.is_public test which tests old and new values
+        Chgs.update(@reactions, %{"id" => "r2", "comment_id" => "c1", "is_public" => true}, %{
+          "text" => "updated",
+          "is_public" => false
+        }),
+        Chgs.insert(@reactions, %{"id" => "r200", "comment_id" => "c1", "is_public" => true})
+      ]
+
+      {filtered_tx, []} = Permissions.filter_read(perms, cxt.tree, Chgs.tx(changes))
+
+      assert filtered_tx.changes == [
+               Chgs.update(@issues, %{"id" => "i1", "project_id" => "p1"}, %{"text" => "updated"}),
+               Chgs.insert(@issues, %{"id" => "i100", "project_id" => "p1"}),
+               Chgs.insert(@issues, %{"id" => "i101", "project_id" => "p2"}),
+               # author_id is us
+               Chgs.update(
+                 @comments,
+                 %{"id" => "c1", "issue_id" => "i1", "author_id" => Auth.user_id()},
+                 %{"text" => "updated"}
+               ),
+               # matches the is_public clause
+               Chgs.update(
+                 @reactions,
+                 %{"id" => "r1", "comment_id" => "c1", "is_public" => true},
+                 %{
+                   "text" => "updated"
+                 }
+               ),
+               Chgs.insert(@reactions, %{
+                 "id" => "r200",
+                 "comment_id" => "c1",
+                 "is_public" => true
+               })
+             ]
+    end
   end
 end

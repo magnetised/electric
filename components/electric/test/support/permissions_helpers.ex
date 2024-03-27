@@ -13,7 +13,7 @@ defmodule ElectricTest.PermissionsHelpers do
            "create table projects (id uuid primary key, workspace_id uuid not null references workspaces (id))",
            "create table issues (id uuid primary key, project_id uuid not null references projects (id), description text)",
            "create table comments (id uuid primary key, issue_id uuid not null references issues (id), comment text, owner text, author_id uuid references users (id))",
-           "create table reactions (id uuid primary key, comment_id uuid not null references comments (id))",
+           "create table reactions (id uuid primary key, comment_id uuid not null references comments (id), is_public bool)",
            "create table users (id uuid primary key, role text not null default 'normie')",
            "create table teams (id uuid primary key)",
            "create table tags (id uuid primary key, tag text not null)",
@@ -131,6 +131,10 @@ defmodule ElectricTest.PermissionsHelpers do
   defmodule Auth do
     def user_id do
       "92bafe18-a818-4a3f-874f-590324140478"
+    end
+
+    def not_user_id do
+      "e0a09d39-d620-4a28-aa18-8d3eacc5da4e"
     end
 
     def user(id \\ user_id()) do
