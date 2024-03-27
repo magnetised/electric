@@ -880,4 +880,9 @@ defmodule Electric.Satellite.Permissions.Client do
   defp cols(schema, table) do
     Map.fetch(schema.columns, table)
   end
+
+  def sql_expr(%Permissions.Eval.ExpressionContext{} = expr, action, values)
+      when action in @actions do
+    @dialect.expr(Map.fetch!(expr.expr, action), values)
+  end
 end
