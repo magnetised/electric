@@ -1395,6 +1395,144 @@ defmodule Electric.Satellite.PermissionsTest do
           )
         )
       end
+
+      test "local role granting", cxt do
+        # if an assign has a where clause then local roles should honour that
+        # and only grant the role if the where clause passes
+        # reset the db because we're repeating the permissions setup
+        cxt = cxt.module.reset(cxt)
+
+        perms =
+          cxt.module.perms(
+            cxt,
+            [
+              # project level perms
+              ~s[GRANT ALL ON #{table(@issues)} TO (#{table(@projects)}, 'manager')],
+              ~s[GRANT ALL ON #{table(@comments)} TO (#{table(@projects)}, 'manager')],
+              # read only to viewer
+              ~s[GRANT READ ON #{table(@issues)} TO (#{table(@projects)}, 'viewer')],
+              ~s[GRANT READ ON #{table(@comments)} TO (#{table(@projects)}, 'viewer')],
+              # global roles allowing create project and assign members
+              ~s[GRANT ALL ON #{table(@projects)} TO 'admin'],
+              ~s[GRANT ALL ON #{table(@project_memberships)} TO 'admin'],
+              ~s[GRANT ALL ON site_admins TO 'admin'],
+
+              # global roles with a join table
+              ~s[GRANT ALL ON #{table(@regions)} TO 'site.admin'],
+              ~s[GRANT ALL ON #{table(@offices)} TO 'site.admin'],
+              ~s[ELECTRIC ASSIGN (#{table(@projects)}, #{table(@project_memberships)}.role) TO #{table(@project_memberships)}.user_id IF (ROW.valid)],
+              ~s[ELECTRIC ASSIGN 'site.admin' TO #{table(@project_memberships)}.user_id IF (ROW.role = 'site.admin')],
+              @global_assign,
+              ~s[ASSIGN site_admins.role TO site_admins.user_id]
+            ],
+            [
+              Roles.role("admin", "assign-2")
+            ]
+          )
+
+        assert_write_rejected(
+          cxt.module.validate_write(
+            perms,
+            cxt.tree,
+            Chgs.tx([
+              Chgs.insert(@issues, %{
+                "id" => "i100",
+                "project_id" => "p1"
+              })
+            ])
+          )
+        )
+
+        assert_write_rejected(
+          cxt.module.validate_write(
+            perms,
+            cxt.tree,
+            Chgs.tx([
+              Chgs.insert(@project_memberships, %{
+                "id" => "pm100",
+                "user_id" => Auth.user_id(),
+                "project_id" => "p1",
+                "role" => "manager",
+                "valid" => false
+              }),
+              Chgs.insert(@issues, %{
+                "id" => "i100",
+                "project_id" => "p1"
+              })
+            ])
+          )
+        )
+
+        assert {:ok, perms} =
+                 cxt.module.validate_write(
+                   perms,
+                   cxt.tree,
+                   Chgs.tx([
+                     Chgs.insert(@project_memberships, %{
+                       "id" => "pm100",
+                       "user_id" => Auth.user_id(),
+                       "project_id" => "p1",
+                       "role" => "manager",
+                       "valid" => true
+                     }),
+                     Chgs.insert(@issues, %{
+                       "id" => "i100",
+                       "project_id" => "p1"
+                     })
+                   ])
+                 )
+
+        assert_write_rejected(
+          cxt.module.validate_write(
+            perms,
+            cxt.tree,
+            Chgs.tx([
+              Chgs.delete(@project_memberships, %{
+                "id" => "pm100",
+                "user_id" => Auth.user_id(),
+                "project_id" => "p1",
+                "role" => "manager",
+                "valid" => true
+              }),
+              Chgs.insert(@issues, %{
+                "id" => "i101",
+                "project_id" => "p1"
+              })
+            ])
+          )
+        )
+
+        assert_write_rejected(
+          cxt.module.validate_write(
+            perms,
+            cxt.tree,
+            Chgs.tx([
+              Chgs.insert(@regions, %{
+                "id" => "rg200"
+              })
+            ])
+          )
+        )
+
+        assert {:ok, _perms} =
+                 cxt.module.validate_write(
+                   perms,
+                   cxt.tree,
+                   Chgs.tx([
+                     # insert a special 'site.admin' role
+                     Chgs.insert(@project_memberships, %{
+                       "id" => "pm100",
+                       "user_id" => Auth.user_id(),
+                       "project_id" => "p1",
+                       "role" => "site.admin",
+                       "valid" => false
+                     }),
+                     Chgs.insert(@regions, %{
+                       "id" => "rg200"
+                     })
+                   ])
+                 )
+      end
     end
   end
 

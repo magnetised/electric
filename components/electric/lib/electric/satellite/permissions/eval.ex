@@ -19,18 +19,22 @@ defmodule Electric.Satellite.Permissions.Eval do
     ["auth", "user_id"] => :text
   }
 
-  defstruct [:auth, tables: %{}]
+  defstruct tables: %{}, context: %{types: %{}, values: %{}}
 
+  @type context() :: %{
+          types: %{[String.t(), ...] => Env.pg_type()},
+          values: %{[String.t(), ...] => term()}
+        }
   @type t() :: %__MODULE__{
-          auth: Auth.t(),
+          context: context(),
           tables: %{Electric.Postgres.relation() => %{Electric.Postgres.name() => Env.pg_type()}}
         }
 
   defmodule ExpressionContext do
-    defstruct [:query, :auth, :relation, :columns, :expr]
+    defstruct [:query, :context, :relation, :columns, :expr]
 
     @type t() :: %__MODULE__{
-            auth: Runner.val_map(),
+            context: Runner.val_map(),
             relation: Electric.Postgres.relation(),
             columns: %{Electric.Postgres.name() => Env.pg_type()},
             expr: %{
@@ -41,9 +45,17 @@ defmodule Electric.Satellite.Permissions.Eval do
           }
   end
 
+  def new(%SchemaLoader.Version{} = schema_version) do
+    new_evaluator(%__MODULE__{}, schema_version)
+  end
+
   def new(%SchemaLoader.Version{} = schema_version, %Auth{} = auth) do
-    Enum.reduce(schema_version.tables, %__MODULE__{auth: auth}, fn {relation, table_schema},
-                                                                   eval ->
+    evaluator = struct(__MODULE__, context: auth_context(auth))
+    new_evaluator(evaluator, schema_version)
+  end
+
+  defp new_evaluator(%__MODULE__{} = evaluator, %SchemaLoader.Version{tables: tables}) do
+    Enum.reduce(tables, evaluator, fn {relation, table_schema}, eval ->
       columns =
         Map.new(table_schema.columns, fn column ->
           {column.name, String.to_atom(column.type.name)}
@@ -59,15 +71,35 @@ defmodule Electric.Satellite.Permissions.Eval do
   This pre-compiles the given expression for the given table using the table column type
   information.
 
+  The `query` must return a `:bool` value.
+
   Because of the expansion of `ROW` (and `THIS`) expressions depending on the operation (`UPDATE`,
   `DELETE` etc) this compilation is done per operation and the resulting expressions stored in a
   lookup table.
   """
+  def expression_context(_evaluator, nil, _table) do
+    {:ok, nil}
+  end
+
   def expression_context(evaluator, query, {_, _} = table) do
     with {:ok, refs} <- refs(evaluator, table),
-         {:ok, expr} <- Parser.parse_and_validate_expression(query, refs, env()),
+         {:ok, expr} <- parse_and_validate_expression(query, refs),
          expr_cxt = new_expression_context(evaluator, query, table) do
       {:ok, struct(expr_cxt, expr: expand_row_aliases(expr))}
+    end
+  end
+
+  defp parse_and_validate_expression(query, refs) do
+    case Parser.parse_and_validate_expression(query, refs, env()) do
+      {:ok, %{returns: :bool} = expr} ->
+        {:ok, expr}
+
+      {:ok, %{returns: returns} = _expr} ->
+        {:error,
+         "where clause must return a boolean value: got #{inspect(query)} -> #{to_string(returns)}"}
+
+      error ->
+        error
     end
   end
 
@@ -122,31 +154,38 @@ defmodule Electric.Satellite.Permissions.Eval do
     execute_expr(expr_cxt, :delete, values)
   end
 
+  # allows for testing a record (either old or new) against an expression
+  def evaluate!(%ExpressionContext{} = expr_cxt, record) when is_map(record) do
+    values = Map.new(record, fn {k, v} -> {["new", k], v} end)
+
+    {:ok, result} = execute_expr(expr_cxt, :insert, values)
+    result
+  end
+
   defp execute_expr(expr_cxt, op, values) do
     expr = Map.fetch!(expr_cxt.expr, op)
-    values = Map.merge(values, expr_cxt.auth)
+    values = Map.merge(values, expr_cxt.context)
     Runner.execute(expr, values)
   end
 
-  defp new_expression_context(%__MODULE__{auth: auth, tables: tables}, query, table) do
+  defp new_expression_context(%__MODULE__{context: context, tables: tables}, query, table) do
     struct(ExpressionContext,
       query: query,
-      auth: %{["auth", "user_id"] => auth.user_id},
+      context: context.values,
       relation: table,
       columns: Map.fetch!(tables, table)
     )
   end
 
   defp refs(%__MODULE__{} = evaluator, table) do
-    with {:ok, table_refs} <- table_refs(evaluator, table),
-         {:ok, auth_refs} <- auth_refs(evaluator) do
-      {:ok, Map.merge(table_refs, auth_refs)}
+    with {:ok, table_refs} <- table_refs(evaluator, table) do
+      {:ok, Map.merge(table_refs, evaluator.context.types)}
     end
   end
 
-  defp auth_refs(%__MODULE__{auth: %Auth{}} = _auth) do
+  defp auth_context(%Auth{} = auth) do
     # TODO: add types of any claims in the auth struct
-    {:ok, @base_auth_refs}
+    %{types: @base_auth_refs, values: %{["auth", "user_id"] => auth.user_id}}
   end
 
   defp table_refs(%__MODULE__{tables: tables}, table) do

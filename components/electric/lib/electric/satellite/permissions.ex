@@ -529,10 +529,10 @@ defmodule Electric.Satellite.Permissions do
   defp apply_triggers(write_buffer, change, perms) do
     %{auth: %{user_id: user_id}} = perms
 
-    {changes, _user_id} =
+    {effects, _user_id} =
       Trigger.apply(change, perms.triggers, user_id, &null_trigger/2)
 
-    update_transient_roles(changes, perms, write_buffer)
+    update_transient_roles(effects, perms, write_buffer)
   end
 
   defp null_trigger(_change, user_id) do
@@ -541,11 +541,11 @@ defmodule Electric.Satellite.Permissions do
 
   defp trigger_callback(event, _change, user_id) do
     case event do
-      {c, %{user_id: ^user_id} = role} when c in [:insert, :delete] ->
-        {[{c, Role.new(role)}], user_id}
+      {e, %{user_id: ^user_id} = role} when e in [:insert, :delete] ->
+        {[{e, Role.new(role)}], user_id}
 
       # update nothing to do with us
-      {c, _role} when c in [:insert, :delete] ->
+      {e, _role} when e in [:insert, :delete] ->
         {[], user_id}
 
       # update keeps role belonging  to our user
@@ -562,6 +562,9 @@ defmodule Electric.Satellite.Permissions do
 
       # update nothing to do with us
       {:update, _old, _new} ->
+        {[], user_id}
+
+      :passthrough ->
         {[], user_id}
     end
   end
@@ -698,8 +701,6 @@ defmodule Electric.Satellite.Permissions do
   end
 
   def update_transient_roles(role_changes, %__MODULE__{} = perms, write_buffer) do
-    %{grants: grants} = perms
-
-    WriteBuffer.update_transient_roles(write_buffer, role_changes, grants)
+    WriteBuffer.update_transient_roles(write_buffer, role_changes, perms.grants)
   end
 end

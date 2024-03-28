@@ -30,7 +30,8 @@ defmodule ElectricTest.PermissionsHelpers do
               id uuid primary key,
               user_id uuid not null references users (id),
               project_id uuid not null references projects (id),
-              role text not null
+              role text not null,
+              valid bool
            )
            """,
            """

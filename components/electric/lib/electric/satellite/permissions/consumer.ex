@@ -15,6 +15,7 @@ defmodule Electric.Satellite.Permissions.Consumer do
   @type name() :: Electric.Postgres.name()
   @type trigger_fun() ::
           (Changes.change(), SchemaLoader.t() -> {[Changes.change()], SchemaLoader.t()})
+  @typep update_fun() :: (%SatPerms{}, %SatPerms.Role{} -> {:ok, %SatPerms.Roles{}, boolean()})
 
   @type t() :: %__MODULE__{
           rules: %SatPerms.Rules{},
@@ -120,95 +121,99 @@ defmodule Electric.Satellite.Permissions.Consumer do
   end
 
   defp apply_triggers(change, {triggers, loader}) do
-    {changes, loader} =
+    {effects, loader} =
       Trigger.apply(change, triggers, loader)
 
-    {changes, {triggers, loader}}
+    {effects, {triggers, loader}}
+  end
+
+  defp update_roles_callback(:passthrough, change, loader) do
+    {[change], loader}
   end
 
   defp update_roles_callback({:insert, role}, change, loader) do
-    {:ok, loader, perms} = mutate_user_perms(role, loader, &insert_role/2)
+    {:ok, loader, update_message} = mutate_user_perms(role, loader, &insert_role/2)
 
     {
-      [
-        change,
-        updated_user_permissions(role.user_id, perms)
-      ],
+      [change | update_message],
       loader
     }
   end
 
   defp update_roles_callback({:update, old_role, new_role}, change, loader) do
     if old_role.user_id == new_role.user_id do
-      {:ok, loader, perms} = mutate_user_perms(new_role, loader, &update_role/2)
+      {:ok, loader, update_message} = mutate_user_perms(new_role, loader, &update_role/2)
 
       {
-        [
-          change,
-          updated_user_permissions(new_role.user_id, perms)
-        ],
+        [change | update_message],
         loader
       }
     else
-      {:ok, loader, old_perms} = mutate_user_perms(old_role, loader, &delete_role/2)
-      {:ok, loader, new_perms} = mutate_user_perms(new_role, loader, &insert_role/2)
+      {:ok, loader, old_update_message} = mutate_user_perms(old_role, loader, &delete_role/2)
+      {:ok, loader, new_update_message} = mutate_user_perms(new_role, loader, &insert_role/2)
 
       {
-        [
-          change,
-          updated_user_permissions(old_role.user_id, old_perms),
-          updated_user_permissions(new_role.user_id, new_perms)
-        ],
+        Enum.concat([
+          [change],
+          old_update_message,
+          new_update_message
+        ]),
         loader
       }
     end
   end
 
   defp update_roles_callback({:delete, role}, change, loader) do
-    {:ok, loader, perms} = mutate_user_perms(role, loader, &delete_role/2)
+    {:ok, loader, update_message} = mutate_user_perms(role, loader, &delete_role/2)
 
     {
-      [
-        change,
-        updated_user_permissions(role.user_id, perms)
-      ],
+      [change | update_message],
       loader
     }
   end
 
+  @spec mutate_user_perms(%SatPerms.Role{}, SchemaLoader.t(), update_fun()) ::
+          {:ok, SchemaLoader.t(), [Changes.UpdatedPermissions.t()]}
   defp mutate_user_perms(role, loader, update_fun) do
     with {:ok, loader, perms} <- SchemaLoader.user_permissions(loader, role.user_id),
-         {:ok, roles} <- update_fun.(perms, role),
-         roles = gc_roles(perms, roles) do
-      {:ok, _loader, _perms} = SchemaLoader.save_user_permissions(loader, role.user_id, roles)
+         {:ok, roles, modified?} <- update_fun.(perms, role),
+         {roles, modified?} = gc_roles(perms, roles, modified?) do
+      if modified? do
+        with {:ok, loader, perms} <-
+               SchemaLoader.save_user_permissions(loader, role.user_id, roles) do
+          {:ok, loader, [updated_user_permissions(role.user_id, perms)]}
+        end
+      else
+        {:ok, loader, []}
+      end
     end
   end
 
   defp insert_role(perms, new_role) do
     with roles <- load_roles(perms) do
-      {:ok, Map.update!(roles, :roles, &[new_role | &1])}
+      {:ok, Map.update!(roles, :roles, &[new_role | &1]), true}
     end
   end
 
   defp update_role(perms, new_role) do
-    with roles <- load_roles(perms) do
-      {:ok,
-       Map.update!(
-         roles,
-         :roles,
-         &Enum.map(&1, fn role -> if role_match?(role, new_role), do: new_role, else: role end)
-       )}
+    with user_roles <- load_roles(perms) do
+      {updated_roles, modified?} =
+        Enum.map_reduce(user_roles.roles, false, fn role, modified? ->
+          if role_match?(role, new_role), do: {new_role, true}, else: {role, modified?}
+        end)
+
+      {:ok, %{user_roles | roles: updated_roles}, modified?}
     end
   end
 
   defp delete_role(perms, new_role) do
-    with roles <- load_roles(perms) do
-      {:ok,
-       Map.update!(
-         roles,
-         :roles,
-         &Enum.reject(&1, fn role -> role_match?(role, new_role) end)
-       )}
+    with user_roles <- load_roles(perms) do
+      {updated_roles, modified?} =
+        Enum.flat_map_reduce(user_roles.roles, false, fn role, modified? ->
+          if role_match?(role, new_role), do: {[], true}, else: {[role], modified?}
+        end)
+
+      {:ok, %{user_roles | roles: updated_roles}, modified?}
     end
   end
 
@@ -240,10 +245,17 @@ defmodule Electric.Satellite.Permissions.Consumer do
     }
   end
 
-  defp gc_roles(perms, roles) do
+  defp gc_roles(perms, roles, modified?) do
     valid_assigns = MapSet.new(perms.rules.assigns, & &1.id)
 
-    %{roles | roles: Enum.filter(roles.roles, &MapSet.member?(valid_assigns, &1.assign_id))}
+    {updated_roles, modified?} =
+      Enum.flat_map_reduce(roles.roles, modified?, fn role, modified? ->
+        if MapSet.member?(valid_assigns, role.assign_id),
+          do: {[role], modified?},
+          else: {[], true}
+      end)
+
+    {%{roles | roles: updated_roles}, modified?}
   end
 
   @doc """
