@@ -101,7 +101,7 @@ defmodule Electric.Satellite.Permissions.Client do
           |> Stream.map(fn {fk, pk} -> [ref(a, fk, @dialect), " = ", ref(b, pk, @dialect)] end)
           |> and_()
 
-        lines([["LEFT JOIN ", @dialect.table(a), " ON "], indent(clauses)])
+        lines([["INNER JOIN ", @dialect.table(a), " ON "], indent(clauses)])
       end)
 
     where =
