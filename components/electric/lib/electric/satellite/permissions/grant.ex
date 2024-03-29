@@ -16,7 +16,7 @@ defmodule Electric.Satellite.Permissions.Grant do
           privilege: Electric.Satellite.Permissions.privilege(),
           columns: :all | MapSet.t(),
           scope: relation(),
-          check: String.t(),
+          check: nil | Eval.ExpressionContext.t(),
           path: [String.t()],
           source: %SatPerms.Grant{}
         }
