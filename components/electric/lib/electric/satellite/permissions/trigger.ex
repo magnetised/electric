@@ -10,7 +10,7 @@ defmodule Electric.Satellite.Permissions.Trigger do
           | {:update, old :: role(), new :: role()}
           | {:delete, old :: role()}
   @type callback_arg() :: term()
-  @type callback_result() :: {[term()], callback_arg()}
+  @type callback_result() :: {[Changes.change() | [term()]], callback_arg()}
   @type callback_fun() :: (role_event(), Changes.change(), callback_arg() -> callback_result())
   @type trigger_fun() :: (Changes.change(), callback_arg() -> callback_result())
   @type triggers() :: %{Electric.Postgres.relation() => trigger_fun()}
@@ -32,6 +32,10 @@ defmodule Electric.Satellite.Permissions.Trigger do
      change in role
   2. The original pg change event
   3. The second argument to the original callback
+
+  It should return a tuple `{effects :: [term()], callback_arg()}` which is list of effects, which
+  will be appended to the original change plus the modified callback argument it was given, or
+  `nil` which is the same as returning `{[], original_callback_arg}`.
   """
   @spec assign_triggers([%SatPerms.Assign{}], SchemaLoader.Version.t(), callback_fun()) ::
           triggers()
@@ -93,30 +97,27 @@ defmodule Electric.Satellite.Permissions.Trigger do
   Apply the triggers to the given change.
 
   The `fallback` function is called when no trigger exists for the given relation.
+
   """
-  @spec apply(Changes.change(), triggers(), callback_arg(), trigger_fun()) :: callback_result()
-  def apply(change, triggers, callback_arg, fallback \\ &passthrough_trigger/2)
+  @spec apply(Changes.change(), triggers(), callback_arg()) :: callback_result()
+  def apply(%{relation: relation} = change, triggers, callback_arg) do
+    {effects, callback_arg} =
+      triggers
+      |> Map.get(relation, [&null_trigger/2])
+      |> Enum.flat_map_reduce(callback_arg, fn trigger_fun, arg ->
+        trigger_fun.(change, arg) || {[], arg}
+      end)
 
-  def apply(%{relation: relation} = change, triggers, callback_arg, fallback) do
-    # TODO: altough this claims to support multiple triggers per relation, in reality
-    # if we were to have that it would be difficult to manage which of the triggers
-    # passes on the change data itself
-    # Perhaps should be re-written as pass on change plus any supplemental stream
-    # elements...
-    triggers
-    |> Map.get(relation, [fallback])
-    |> Enum.flat_map_reduce(callback_arg, fn trigger_fun, arg ->
-      trigger_fun.(change, arg) || {[], arg}
-    end)
+    {[change | effects], callback_arg}
   end
 
-  # just pass through changes with no relation
-  def apply(change, _triggers, callback_arg, _fallback) do
-    {[change], callback_arg}
+  # just ignore changes with no relation
+  def apply(_change, _triggers, callback_arg) do
+    {[], callback_arg}
   end
 
-  defp passthrough_trigger(change, arg) do
-    {[change], arg}
+  defp null_trigger(_change, arg) do
+    {[], arg}
   end
 
   defp change_trigger(%Changes.NewRecord{} = change, loader, assign, pks, fks, callback_fun) do
@@ -135,9 +136,7 @@ defmodule Electric.Satellite.Permissions.Trigger do
   defp change_trigger(%Changes.UpdatedRecord{} = change, loader, assign, pks, fks, callback_fun) do
     %{old_record: old, record: new, changed_columns: changed_columns} = change
 
-    if MapSet.size(changed_columns) == 0 do
-      {[change], loader}
-    else
+    if MapSet.size(changed_columns) > 0 do
       # if role as been detatched, e.g. by a fk with delete action "SET NULL" or the role value has
       # been nulled, then delete the role
       role_nulled? =

@@ -58,7 +58,7 @@ defmodule Electric.Satellite.Permissions.Consumer do
     # of ddlx permission commands into a single update to the global permissions struct
     {changes, {state, loader}} =
       changes
-      |> Stream.chunk_by(& &1.relation)
+      |> Enum.chunk_by(& &1.relation)
       |> Enum.flat_map_reduce({state, loader}, &apply_changes/2)
 
     {:ok, changes, state, loader}
@@ -121,55 +121,45 @@ defmodule Electric.Satellite.Permissions.Consumer do
   end
 
   defp apply_triggers(change, {triggers, loader}) do
-    {effects, loader} =
+    {changes, loader} =
       Trigger.apply(change, triggers, loader)
 
-    {effects, {triggers, loader}}
+    {changes, {triggers, loader}}
   end
 
-  defp update_roles_callback(:passthrough, change, loader) do
-    {[change], loader}
+  defp update_roles_callback(:passthrough, _change, loader) do
+    {[], loader}
   end
 
-  defp update_roles_callback({:insert, role}, change, loader) do
+  defp update_roles_callback({:insert, role}, _change, loader) do
     {:ok, loader, update_message} = mutate_user_perms(role, loader, &insert_role/2)
 
-    {
-      [change | update_message],
-      loader
-    }
+    {update_message, loader}
   end
 
-  defp update_roles_callback({:update, old_role, new_role}, change, loader) do
+  defp update_roles_callback({:update, old_role, new_role}, _change, loader) do
     if old_role.user_id == new_role.user_id do
       {:ok, loader, update_message} = mutate_user_perms(new_role, loader, &update_role/2)
 
-      {
-        [change | update_message],
-        loader
-      }
+      {update_message, loader}
     else
       {:ok, loader, old_update_message} = mutate_user_perms(old_role, loader, &delete_role/2)
       {:ok, loader, new_update_message} = mutate_user_perms(new_role, loader, &insert_role/2)
 
       {
-        Enum.concat([
-          [change],
+        Enum.concat(
           old_update_message,
           new_update_message
-        ]),
+        ),
         loader
       }
     end
   end
 
-  defp update_roles_callback({:delete, role}, change, loader) do
+  defp update_roles_callback({:delete, role}, _change, loader) do
     {:ok, loader, update_message} = mutate_user_perms(role, loader, &delete_role/2)
 
-    {
-      [change | update_message],
-      loader
-    }
+    {update_message, loader}
   end
 
   @spec mutate_user_perms(%SatPerms.Role{}, SchemaLoader.t(), update_fun()) ::

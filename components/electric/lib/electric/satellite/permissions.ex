@@ -529,14 +529,10 @@ defmodule Electric.Satellite.Permissions do
   defp apply_triggers(write_buffer, change, perms) do
     %{auth: %{user_id: user_id}} = perms
 
-    {effects, _user_id} =
-      Trigger.apply(change, perms.triggers, user_id, &null_trigger/2)
+    {[^change | effects], _user_id} =
+      Trigger.apply(change, perms.triggers, user_id)
 
     update_transient_roles(effects, perms, write_buffer)
-  end
-
-  defp null_trigger(_change, user_id) do
-    {[], user_id}
   end
 
   defp trigger_callback(event, _change, user_id) do
