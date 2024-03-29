@@ -1,4 +1,13 @@
 defmodule Electric.Satellite.Permissions.Eval do
+  @moduledoc """
+  A wrapper around the functions in `Electric.Replication.Eval` to give DDLX `GRANT .. WHERE` and
+  `ASSIGN ... IF` clauses more flexibility and to precompile expressions for evaluation against a
+  given table.
+
+  Specifically allows for generic tests that will work for inserts, updates and deletes by
+  intelligently re-writing references to `THIS.column`, `ROW.column` and `column` to `NEW.column`,
+  `OLD.column` or, for updates, `(NEW.column) AND (OLD.column)`.
+  """
   alias Electric.Satellite.Auth
 
   alias Electric.Replication.Changes
@@ -27,7 +36,9 @@ defmodule Electric.Satellite.Permissions.Eval do
         }
   @type t() :: %__MODULE__{
           context: context(),
-          tables: %{Electric.Postgres.relation() => %{Electric.Postgres.name() => Env.pg_type()}}
+          tables: %{
+            Electric.Postgres.relation() => %{[Electric.Postgres.name()] => Env.pg_type()}
+          }
         }
 
   defmodule ExpressionContext do
@@ -58,7 +69,7 @@ defmodule Electric.Satellite.Permissions.Eval do
     Enum.reduce(tables, evaluator, fn {relation, table_schema}, eval ->
       columns =
         Map.new(table_schema.columns, fn column ->
-          {column.name, String.to_atom(column.type.name)}
+          {[column.name], String.to_atom(column.type.name)}
         end)
 
       Map.update!(eval, :tables, &Map.put(&1, relation, columns))
@@ -191,9 +202,9 @@ defmodule Electric.Satellite.Permissions.Eval do
   defp table_refs(%__MODULE__{tables: tables}, table) do
     with {:ok, table_columns} <- Map.fetch(tables, table) do
       refs =
-        Enum.reduce(@prefixes, %{}, fn prefix, env ->
+        Enum.reduce(@prefixes, table_columns, fn prefix, env ->
           Enum.reduce(table_columns, env, fn {column, type}, env ->
-            Map.put(env, [prefix, column], type)
+            Map.put(env, [prefix | column], type)
           end)
         end)
 
@@ -237,6 +248,10 @@ defmodule Electric.Satellite.Permissions.Eval do
     Enum.map(args, &replace_alias(&1, pre))
   end
 
+  defp replace_alias(%Ref{path: [column_name]} = ref, base) do
+    %{ref | path: [base, column_name]}
+  end
+
   defp replace_alias(%Ref{path: [this | rest]} = ref, base) when this in @this do
     %{ref | path: [base | rest]}
   end
@@ -254,6 +269,9 @@ defmodule Electric.Satellite.Permissions.Eval do
   end
 
   defp uses_alias?(%Func{args: args}), do: Enum.any?(args, &uses_alias?/1)
+
+  # a single element ref means is referring to a column in the current row, eg. `username = 'something'`
+  defp uses_alias?(%Ref{path: [_column_name]}), do: true
   defp uses_alias?(%Ref{path: [this | _rest]}), do: this in @this
   defp uses_alias?(_), do: false
 

@@ -387,7 +387,7 @@ You can always use the longer syntax for role definitions if you prefer or are w
 - **`role_definition`** - the definition of a role as described above
 - **`table_name`** - the name of an electrified table that holds the users foreign keys to assign roles to
 - **`user_fk`** - the name of the column holding the foreign key of the users to be assigned the role
-- **`if_statement`** - optionally add a statement that will be evaluated against the row in `table_name`. The assignment rule will only assign the role if it evaluates as true. This is useful to assign roles dependent on things like booleans or specific string values. The expression can refer to columns in the current row by using the `ROW` or `THIS` prefix, e.g. `ELECTRIC ASSIGN ... IF (row.is_active)`.
+- **`if_statement`** - optionally add a statement that will be evaluated against the row in `table_name`. The assignment rule will only assign the role if it evaluates as true. This is useful to assign roles dependent on things like booleans or specific string values.
 
 #### Examples
 

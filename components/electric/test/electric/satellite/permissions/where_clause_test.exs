@@ -25,10 +25,28 @@ defmodule Electric.Satellite.Permissions.WhereClauseTest do
     assert {:ok, _expr_cxt} = Permissions.Eval.expression_context(cxt.evaluator, stmt, @table)
   end
 
+  # execute the statement. if we pass `stmt` as a single-arity function
+  # then it will be tested against all the valid prefixes for a generic
+  # row, that is `this.`, `row.` and ``, this allows us to refer to
+  # row columns as either `this.column`, `row.column` or just `column`
+  # in where/if expressions.
   def execute(cxt, stmt, change) do
-    assert {:ok, expr_cxt} = expression(cxt, stmt)
+    if is_function(stmt) do
+      results =
+        for prefix <- ["ROW.", "THIS.", ""] do
+          assert {:ok, expr_cxt} = expression(cxt, stmt.(prefix))
+          assert {:ok, result} = Permissions.Eval.execute(expr_cxt, change)
+          result
+        end
 
-    Permissions.Eval.execute(expr_cxt, change)
+      # make sure that all results are the same
+      assert length(Enum.uniq(results)) == 1
+
+      {:ok, hd(results)}
+    else
+      assert {:ok, expr_cxt} = expression(cxt, stmt)
+      Permissions.Eval.execute(expr_cxt, change)
+    end
   end
 
   def update(base, changes \\ %{}) do
@@ -49,7 +67,7 @@ defmodule Electric.Satellite.Permissions.WhereClauseTest do
 
   describe "UPDATE" do
     test "automatic casting when comparing auth", cxt do
-      stmt = "row.user_id = AUTH.user_id"
+      stmt = &"#{&1}user_id = AUTH.user_id"
 
       assert {:ok, true} = execute(cxt, stmt, update(%{"user_id" => @user_id}))
     end
@@ -72,7 +90,7 @@ defmodule Electric.Satellite.Permissions.WhereClauseTest do
     end
 
     test "with ROW reference", cxt do
-      stmt = "ROW.user_id::text = auth.user_id"
+      stmt = &"#{&1}user_id::text = auth.user_id"
 
       assert {:ok, true} =
                execute(cxt, stmt, update(%{"user_id" => @user_id}))
@@ -85,7 +103,7 @@ defmodule Electric.Satellite.Permissions.WhereClauseTest do
     end
 
     test "multi-clause ROW/THIS reference", cxt do
-      stmt = "(ROW.user_id::text = auth.user_id) AND this.valid"
+      stmt = &"(#{&1}user_id::text = auth.user_id) AND #{&1}valid"
 
       assert {:ok, true} =
                execute(
@@ -110,7 +128,7 @@ defmodule Electric.Satellite.Permissions.WhereClauseTest do
     end
 
     test "mixed row and NEW references", cxt do
-      stmt = "(ROW.user_id::text = auth.user_id) AND NOT new.valid"
+      stmt = &"(#{&1}user_id::text = auth.user_id) AND NOT new.valid"
 
       assert {:ok, true} =
                execute(
@@ -148,7 +166,7 @@ defmodule Electric.Satellite.Permissions.WhereClauseTest do
     end
 
     test "with NOT(ROW) reference to bool column", cxt do
-      stmt = "NOT row.valid"
+      stmt = &"NOT #{&1}valid"
 
       assert {:ok, false} =
                execute(cxt, stmt, update(%{"valid" => true}))
@@ -161,7 +179,7 @@ defmodule Electric.Satellite.Permissions.WhereClauseTest do
     end
 
     test "with THIS reference to bool column", cxt do
-      stmt = "this.valid"
+      stmt = &"#{&1}valid"
 
       assert {:ok, true} =
                execute(cxt, stmt, update(%{"valid" => true}))
@@ -190,7 +208,7 @@ defmodule Electric.Satellite.Permissions.WhereClauseTest do
       end
 
       test "with ROW reference", cxt do
-        stmt = "ROW.user_id::text = auth.user_id"
+        stmt = &"#{&1}user_id::text = auth.user_id"
 
         assert {:ok, true} =
                  execute(cxt, stmt, change(unquote(change_fun), %{"user_id" => @user_id}))
@@ -200,7 +218,7 @@ defmodule Electric.Satellite.Permissions.WhereClauseTest do
       end
 
       test "multi-clause ROW/THIS reference", cxt do
-        stmt = "(ROW.user_id::text = auth.user_id) AND this.valid"
+        stmt = &"(#{&1}user_id::text = auth.user_id) AND #{&1}valid"
 
         assert {:ok, true} =
                  execute(
@@ -235,7 +253,7 @@ defmodule Electric.Satellite.Permissions.WhereClauseTest do
       end
 
       test "with NOT(ROW) reference to bool column", cxt do
-        stmt = "NOT row.valid"
+        stmt = &"NOT #{&1}valid"
 
         assert {:ok, false} =
                  execute(cxt, stmt, change(unquote(change_fun), %{"valid" => true}))
@@ -245,7 +263,7 @@ defmodule Electric.Satellite.Permissions.WhereClauseTest do
       end
 
       test "with THIS reference to bool column", cxt do
-        stmt = "this.valid"
+        stmt = &"#{&1}valid"
 
         assert {:ok, true} =
                  execute(cxt, stmt, change(unquote(change_fun), %{"valid" => true}))
